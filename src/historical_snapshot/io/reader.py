@@ -6,9 +6,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
+from historical_snapshot.config import PmsProfile, PropertyConfig, load_pms_profile
 from historical_snapshot.models import BookingRecord, ValidationIssue
 
-SCHEMA_ALIASES: dict[str, set[str]] = {
+# Baseline aliases used when no PMS profile is supplied (tests, generic CSVs).
+BASE_SCHEMA_ALIASES: dict[str, set[str]] = {
     "property_id": {"property_id", "propertyid", "hotel_id", "hotelid"},
     "property_name": {"property_name", "property", "hotel_name", "hotel"},
     "booking_date": {
@@ -32,6 +34,7 @@ SCHEMA_ALIASES: dict[str, set[str]] = {
         "available_nights",
         "inventory_room_nights",
     },
+    "payment_status": {"payment_status", "payment status"},
 }
 
 REQUIRED_FIELDS = {
@@ -43,17 +46,27 @@ REQUIRED_FIELDS = {
 }
 
 
+def _aliases_for_profile(pms_profile: PmsProfile | None) -> dict[str, set[str]]:
+    if pms_profile is None:
+        return {key: set(values) for key, values in BASE_SCHEMA_ALIASES.items()}
+
+    merged: dict[str, set[str]] = {key: set(values) for key, values in BASE_SCHEMA_ALIASES.items()}
+    for canonical, aliases in pms_profile.column_aliases.items():
+        merged.setdefault(canonical, set()).update(_normalize(alias) for alias in aliases)
+    return merged
+
+
 def _normalize(name: str) -> str:
-    normalized = name.strip().lower().replace(" ", "_")
+    normalized = name.strip().lower().replace(" ", "_").replace("-", "_")
     normalized = normalized.replace("&", "and").replace("#", "")
     return normalized
 
 
-def _resolve_columns(fieldnames: Iterable[str]) -> dict[str, str]:
+def _resolve_columns(fieldnames: Iterable[str], aliases: dict[str, set[str]]) -> dict[str, str]:
     normalized = {_normalize(name): name for name in fieldnames if name}
     mapping: dict[str, str] = {}
-    for canonical, aliases in SCHEMA_ALIASES.items():
-        for alias in aliases:
+    for canonical, canonical_aliases in aliases.items():
+        for alias in canonical_aliases:
             if alias in normalized:
                 mapping[canonical] = normalized[alias]
                 break
@@ -89,7 +102,30 @@ def _parse_int(value: str) -> int:
         raise ValueError(f"Invalid int: {value}") from exc
 
 
-def read_bookings_csv(path: str | Path) -> tuple[list[BookingRecord], list[ValidationIssue]]:
+def _payment_excluded(raw_status: str, excluded: frozenset[str]) -> bool:
+    if not excluded:
+        return False
+    return raw_status.strip().lower() in excluded
+
+
+def read_bookings_csv(
+    path: str | Path,
+    *,
+    property_config: PropertyConfig | None = None,
+    pms_profile: PmsProfile | None = None,
+) -> tuple[list[BookingRecord], list[ValidationIssue]]:
+    if pms_profile is None and property_config is not None:
+        pms_profile = load_pms_profile(property_config.pms)
+
+    aliases = _aliases_for_profile(pms_profile)
+    excluded_payment = property_config.exclude_payment_status if property_config else frozenset()
+    default_property_name = (
+        property_config.property_name
+        if property_config
+        else (pms_profile.defaults.get("property_name", "") if pms_profile else "")
+    )
+    default_property_id = property_config.property_id if property_config else ""
+
     records: list[BookingRecord] = []
     issues: list[ValidationIssue] = []
 
@@ -98,9 +134,14 @@ def read_bookings_csv(path: str | Path) -> tuple[list[BookingRecord], list[Valid
         if not reader.fieldnames:
             raise ValueError("CSV has no header row.")
 
-        column_map = _resolve_columns(reader.fieldnames)
+        column_map = _resolve_columns(reader.fieldnames, aliases)
         for row_number, row in enumerate(reader, start=2):
             try:
+                if "payment_status" in column_map:
+                    payment_status = row[column_map["payment_status"]].strip()
+                    if _payment_excluded(payment_status, excluded_payment):
+                        continue
+
                 booking_date = _parse_date(row[column_map["booking_date"]])
                 if "reservation_date" in column_map:
                     reservation_date = _parse_date(row[column_map["reservation_date"]])
@@ -128,15 +169,18 @@ def read_bookings_csv(path: str | Path) -> tuple[list[BookingRecord], list[Valid
                 listing_name = row.get(column_map.get("listing_name", ""), "").strip()
                 channel = row.get(column_map.get("channel", ""), "").strip()
                 grouping = row.get(column_map.get("grouping", ""), "").strip()
-                status = row.get(column_map.get("status", ""), "").strip().lower() if "status" in column_map else "confirmed"
+                status = (
+                    row.get(column_map.get("status", ""), "").strip().lower()
+                    if "status" in column_map
+                    else "confirmed"
+                )
 
-                # Lafave fallback mapping.
                 if not listing_name and "listing_name" not in column_map:
                     listing_name = row.get("Listing Name", "").strip()
                 if not property_name:
-                    property_name = "LaFave"
+                    property_name = default_property_name or "LaFave"
                 if not property_id:
-                    property_id = listing_name or property_name
+                    property_id = default_property_id or listing_name or property_name
                 if not status:
                     status = "confirmed"
 

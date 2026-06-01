@@ -92,6 +92,39 @@ def stay_overlaps_range(record: BookingRecord, start_date: date, end_date: date)
     return record.check_in_date <= end_date and record.check_out_date > start_date
 
 
+def count_active_listings(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+) -> int:
+    """Listings whose booking history overlaps the snapshot window.
+
+    Uses first check-in and last check-out across all ingested bookings so YoY
+    periods only include units that were on the books during each window.
+    """
+    first_check_in: dict[str, date] = {}
+    last_check_out: dict[str, date] = {}
+    for record in records:
+        if record.status in CANCELLED_STATUSES:
+            continue
+        listing = (record.listing_name or record.property_id).strip()
+        if not listing:
+            continue
+        current_first = first_check_in.get(listing)
+        if current_first is None or record.check_in_date < current_first:
+            first_check_in[listing] = record.check_in_date
+        current_last = last_check_out.get(listing)
+        if current_last is None or record.check_out_date > current_last:
+            last_check_out[listing] = record.check_out_date
+
+    active = 0
+    for listing, first in first_check_in.items():
+        last = last_check_out[listing]
+        if first <= end_date and last > start_date:
+            active += 1
+    return max(active, 1)
+
+
 def nights_in_range(record: BookingRecord, start_date: date, end_date: date) -> int:
     """Occupied nights from check-in through night before check-out, clipped to the range."""
     overlap_start = max(record.check_in_date, start_date)

@@ -31,3 +31,13 @@ def test_discover_properties_finds_lafave():
     properties = discover_properties(DATA_ROOT)
     ids = [p["id"] for p in properties]
     assert "LAFAVE" in ids
+
+
+def test_discover_properties_includes_flohom_config():
+    properties = discover_properties(DATA_ROOT)
+    flohom = next((p for p in properties if p["id"] == "FLOHOM"), None)
+    if flohom is None:
+        pytest.skip("local flohom data folder not present")
+    assert flohom["name"] == "Flohom"
+    assert flohom["inventory_mode"] == "active_listings"
+    assert flohom["pms"] == "hostaway"

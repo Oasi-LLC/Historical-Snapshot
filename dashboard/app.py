@@ -196,8 +196,26 @@ with st.sidebar:
         index=0,
         help="Stay = occupied nights in range (prorated revenue). Arrival/reservation = full booking when check-in/book date falls in range.",
     )
-    breakdown_by = st.selectbox("Breakdown", options=["listing", "grouping"])
-    inventory_listings = st.number_input("Portfolio listing count", min_value=1, value=30, step=1)
+    breakdown_by = st.selectbox(
+        "Breakdown",
+        options=["listing", "grouping"],
+        index=0 if selected.get("config", {}).get("defaults", {}).get("breakdown_by", "listing") == "listing" else 1,
+    )
+    inventory_mode = selected.get("inventory_mode", "manual")
+    default_inventory = selected.get("default_inventory_listings") or 30
+    if inventory_mode == "active_listings":
+        st.caption(
+            "Portfolio occupancy uses listings active in each date range (from booking history), "
+            "so YoY compare uses the correct unit count per period."
+        )
+        inventory_listings = default_inventory
+    else:
+        inventory_listings = st.number_input(
+            "Portfolio listing count",
+            min_value=1,
+            value=int(default_inventory),
+            step=1,
+        )
     bands = st.text_input("Booking window bands", value=DEFAULT_BANDS)
     st.divider()
     st.header("YoY comparison")
@@ -232,6 +250,8 @@ params = {
     "bands": bands,
     "inventory_listings": int(inventory_listings),
 }
+if inventory_mode == "active_listings":
+    params["inventory_mode"] = "active_listings"
 
 try:
     payload = fetch_snapshot(st.session_state.api_url, params)
@@ -256,6 +276,10 @@ portfolio = payload["portfolio_snapshot"]
 dr = portfolio["date_range"]
 
 st.subheader(f"{payload['property']['name']} — {dr['start']} to {dr['end']}")
+if payload.get("inventory_mode") == "active_listings":
+    units_used = payload.get("inventory_units_used")
+    if units_used is not None:
+        st.caption(f"Active listings in range (occupancy denominator): **{units_used}**")
 
 k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
 k1.metric("Bookings", portfolio["bookings_count"])
@@ -271,6 +295,13 @@ if compare_payload is not None:
     compare_portfolio = compare_payload["portfolio_snapshot"]
     compare_dr = compare_portfolio["date_range"]
     st.subheader(f"YoY comparison vs {compare_dr['start']} to {compare_dr['end']}")
+    if compare_payload.get("inventory_mode") == "active_listings":
+        compare_units = compare_payload.get("inventory_units_used")
+        current_units = payload.get("inventory_units_used")
+        if compare_units is not None and current_units is not None:
+            st.caption(
+                f"Active listings: **{current_units}** (current) vs **{compare_units}** (compare period)"
+            )
     yoy_rows = [
         ("Revenue", portfolio["room_revenue"], compare_portfolio["room_revenue"], "money"),
         ("ADR", portfolio["adr"], compare_portfolio["adr"], "money"),

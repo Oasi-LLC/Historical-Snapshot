@@ -1,0 +1,11 @@
+{
+  "folder": "flohom",
+  "pms": "hostaway",
+  "property_id": "FLOHOM",
+  "property_name": "Flohom",
+  "inventory_mode": "active_listings",
+  "exclude_payment_status": ["unpaid", "unknown"],
+  "defaults": {
+    "breakdown_by": "listing"
+  }
+}

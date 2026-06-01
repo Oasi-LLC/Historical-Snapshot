@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-
+SRC = Path(__file__).resolve().parent.parent / "src"
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SRC)
     return subprocess.run(
         [sys.executable, "-m", "historical_snapshot.cli", *args],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
 
 

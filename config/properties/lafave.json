@@ -1,0 +1,11 @@
+{
+  "folder": "lafave",
+  "pms": "lafave",
+  "property_id": "LAFAVE",
+  "property_name": "LaFave",
+  "inventory_mode": "manual",
+  "default_inventory_listings": 30,
+  "defaults": {
+    "breakdown_by": "listing"
+  }
+}

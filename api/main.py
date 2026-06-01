@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,6 +55,11 @@ def get_snapshot(
     breakdown_by: str = Query(default="listing", pattern="^(listing|grouping)$"),
     bands: str = Query(default="0-7,8-15,16-30,31-60,61+"),
     inventory_listings: int = Query(default=30, ge=1),
+    inventory_mode: Optional[str] = Query(
+        default=None,
+        pattern="^(manual|active_listings)$",
+        description="Override property config inventory mode",
+    ),
 ) -> dict:
     path = Path(csv_path)
     if not path.is_file():
@@ -69,6 +75,7 @@ def get_snapshot(
             breakdown_by=breakdown_by,
             bands=bands,
             inventory_listings=inventory_listings,
+            inventory_mode=inventory_mode,  # type: ignore[arg-type]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

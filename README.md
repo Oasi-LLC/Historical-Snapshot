@@ -176,9 +176,11 @@ Portfolio CSVs are **not committed** (booking/revenue data stays local). After c
 data/
   lafave/
     lafave_main_data.csv
+  flohom/
+    flohom_main_data.csv
 ```
 
-Add more properties as `data/<property_id>/*.csv`. The API discovers them via `GET /properties?data_root=data`.
+Add more properties as `data/<property_id>/*.csv`. Column mapping and defaults live in `config/properties/<folder>.json` and `config/pms/`. The API discovers folders via `GET /properties?data_root=data`.
 
 See `data/README.md` for details. Tests use only `tests/fixtures/`.
 
@@ -193,7 +195,7 @@ No `data/` CSV required — fixtures cover unit and API tests.
 
 ## Canonical CSV columns
 
-LaFave-style exports are supported out of the box.
+LaFave-style exports use the `lafave` PMS profile; Hostaway exports (e.g. Flohom) use `config/pms/hostaway.json` and `config/properties/flohom.json`.
 
 **Required (or mapped aliases):** arrival/check-in, departure/check-out, amount, nights, listing name.
 

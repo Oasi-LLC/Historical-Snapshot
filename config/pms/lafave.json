@@ -1,0 +1,17 @@
+{
+  "id": "lafave",
+  "column_aliases": {
+    "booking_date": ["date_and_time", "booking_date", "booked_date", "created_date"],
+    "check_in_date": ["arrival", "arrival_date", "check_in_date", "checkin_date"],
+    "check_out_date": ["departure", "departure_date", "check_out_date", "checkout_date"],
+    "room_revenue": ["amount", "room_revenue", "revenue", "net_revenue"],
+    "room_nights": ["_nights", "nights", "room_nights", "roomnights"],
+    "listing_name": ["listing_name", "listing"],
+    "channel": ["channel"],
+    "grouping": ["grouping"],
+    "reservation_date": ["reservation_date", "reservationdate"]
+  },
+  "defaults": {
+    "property_name": "LaFave"
+  }
+}

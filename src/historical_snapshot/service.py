@@ -4,12 +4,20 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from historical_snapshot.config import (
+    InventoryMode,
+    PropertyConfig,
+    load_pms_profile,
+    load_property_config,
+    resolve_property_config,
+)
 from historical_snapshot.core.bands import Band, parse_bands
 from historical_snapshot.core.metrics import (
     DateBasis,
     SnapshotMetrics,
     compute_portfolio_snapshot_metrics,
     compute_snapshot_metrics,
+    count_active_listings,
 )
 from historical_snapshot.core.snapshot import snapshot_to_dict
 from historical_snapshot.io.reader import read_bookings_csv
@@ -28,6 +36,8 @@ class SnapshotResult:
     breakdown: list[SnapshotMetrics]
     invalid_rows_skipped: int
     validation_issues: list[ValidationIssue]
+    inventory_mode: InventoryMode = "manual"
+    inventory_units_used: int | None = None
 
     @property
     def portfolio_snapshot(self) -> dict:
@@ -44,6 +54,8 @@ class SnapshotResult:
             "portfolio_snapshot": self.portfolio_snapshot,
             "breakdown_snapshots": self.breakdown_snapshots,
             "invalid_rows_skipped": self.invalid_rows_skipped,
+            "inventory_mode": self.inventory_mode,
+            "inventory_units_used": self.inventory_units_used,
         }
 
 
@@ -80,13 +92,42 @@ def records_for_breakdown(records: list[BookingRecord], breakdown_by: str) -> li
     return remapped
 
 
-def grouping_inventory_counts(records: list[BookingRecord]) -> dict[str, int]:
+def grouping_inventory_counts(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    *,
+    inventory_mode: InventoryMode,
+) -> dict[str, int]:
     listings_by_group: dict[str, set[str]] = {}
     for record in records:
         group = record.grouping or "Ungrouped"
         listing = record.listing_name or record.property_id
         listings_by_group.setdefault(group, set()).add(listing)
+
+    if inventory_mode == "active_listings":
+        counts: dict[str, int] = {}
+        for group, listings in listings_by_group.items():
+            group_records = [r for r in records if (r.grouping or "Ungrouped") == group]
+            counts[group] = count_active_listings(group_records, start_date, end_date)
+        return counts
+
     return {group: max(len(listings), 1) for group, listings in listings_by_group.items()}
+
+
+def resolve_inventory_units(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    *,
+    inventory_mode: InventoryMode,
+    manual_units: int | None,
+) -> int:
+    if inventory_mode == "active_listings":
+        return count_active_listings(records, start_date, end_date)
+    if manual_units is not None:
+        return manual_units
+    return 1
 
 
 def discover_properties(data_root: Path | str = DEFAULT_DATA_ROOT) -> list[dict]:
@@ -100,20 +141,45 @@ def discover_properties(data_root: Path | str = DEFAULT_DATA_ROOT) -> list[dict]
         csv_files = sorted(folder.glob("*.csv"))
         if not csv_files:
             continue
-        properties.append(
-            {
-                "id": folder.name.upper(),
-                "name": folder.name.replace("_", " ").title(),
-                "data_dir": str(folder),
-                "csv_path": str(csv_files[0]),
-                "csv_files": [str(p) for p in csv_files],
-            }
-        )
+
+        property_config = load_property_config(folder.name)
+        if property_config:
+            prop_id = property_config.property_id
+            prop_name = property_config.property_name
+            inventory_mode = property_config.inventory_mode
+            default_inventory = property_config.default_inventory_listings
+            pms = property_config.pms
+        else:
+            prop_id = folder.name.upper()
+            prop_name = folder.name.replace("_", " ").title()
+            inventory_mode = "manual"
+            default_inventory = None
+            pms = None
+
+        entry: dict = {
+            "id": prop_id,
+            "name": prop_name,
+            "data_dir": str(folder),
+            "csv_path": str(csv_files[0]),
+            "csv_files": [str(p) for p in csv_files],
+            "inventory_mode": inventory_mode,
+            "default_inventory_listings": default_inventory,
+        }
+        if pms:
+            entry["pms"] = pms
+        if property_config:
+            entry["config"] = property_config.to_dict()
+        properties.append(entry)
     return properties
 
 
 def list_listings(csv_path: str | Path) -> list[str]:
-    records, _ = read_bookings_csv(csv_path)
+    property_config, pms_profile = resolve_property_config(csv_path)
+    records, _ = read_bookings_csv(
+        csv_path,
+        property_config=property_config,
+        pms_profile=pms_profile,
+    )
     return sorted({r.listing_name or r.property_id for r in records if r.listing_name or r.property_id})
 
 
@@ -128,14 +194,48 @@ def run_snapshot(
     breakdown_by: str = "listing",
     bands: str | list[Band] = DEFAULT_BANDS,
     inventory_listings: int = 30,
+    inventory_mode: InventoryMode | None = None,
+    property_folder: str | None = None,
 ) -> SnapshotResult:
     start = parse_date(start_date)
     end = parse_date(end_date)
     if end < start:
         raise ValueError("end_date must be on or after start_date")
 
+    if property_folder:
+        property_config = load_property_config(property_folder)
+        pms_profile = load_pms_profile(property_config.pms) if property_config else None
+    else:
+        property_config, pms_profile = resolve_property_config(
+            csv_path,
+            property_id=property_id,
+            property_name=property_name,
+        )
+    if property_config:
+        property_id = property_config.property_id
+        property_name = property_config.property_name
+        breakdown_by = property_config.defaults.get("breakdown_by", breakdown_by)
+        if inventory_mode is None:
+            inventory_mode = property_config.inventory_mode
+        if inventory_mode == "manual" and property_config.default_inventory_listings is not None:
+            inventory_listings = property_config.default_inventory_listings
+    if inventory_mode is None:
+        inventory_mode = "manual"
+
     parsed_bands = bands if isinstance(bands, list) else parse_bands(bands)
-    records, issues = read_bookings_csv(csv_path)
+    records, issues = read_bookings_csv(
+        csv_path,
+        property_config=property_config,
+        pms_profile=pms_profile,
+    )
+
+    portfolio_inventory = resolve_inventory_units(
+        records,
+        start,
+        end,
+        inventory_mode=inventory_mode,
+        manual_units=inventory_listings,
+    )
 
     portfolio = compute_portfolio_snapshot_metrics(
         records=records,
@@ -144,11 +244,15 @@ def run_snapshot(
         end_date=end,
         bands=parsed_bands,
         date_basis=date_basis,
-        inventory_units=inventory_listings,
+        inventory_units=portfolio_inventory,
     )
     breakdown_records = records_for_breakdown(records, breakdown_by)
     bucket_ids = sorted({r.property_id for r in breakdown_records})
-    inventory_by_group = grouping_inventory_counts(records) if breakdown_by == "grouping" else {}
+    inventory_by_group = (
+        grouping_inventory_counts(records, start, end, inventory_mode=inventory_mode)
+        if breakdown_by == "grouping"
+        else {}
+    )
 
     def breakdown_inventory_units(bucket_id: str) -> int:
         if breakdown_by == "listing":
@@ -177,4 +281,6 @@ def run_snapshot(
         breakdown=breakdown_snapshots,
         invalid_rows_skipped=len(issues),
         validation_issues=issues,
+        inventory_mode=inventory_mode,
+        inventory_units_used=portfolio_inventory,
     )

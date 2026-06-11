@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from historical_snapshot.core.bands import DEFAULT_BANDS
 from historical_snapshot.core.snapshot import multi_snapshot_to_text
 from historical_snapshot.service import run_snapshot
 
@@ -40,8 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--bands",
-        default="0-7,8-15,16-30,31-60,61+",
-        help="Booking window bands, e.g. '0-7,8-15,16-30,31-60,61+'",
+        default=DEFAULT_BANDS,
+        help=f"Booking window bands, e.g. '{DEFAULT_BANDS}'",
     )
     parser.add_argument(
         "--format",

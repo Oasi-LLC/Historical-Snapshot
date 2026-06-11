@@ -1,0 +1,18 @@
+{
+  "id": "track",
+  "column_aliases": {
+    "booking_date": ["booking_date", "booking date"],
+    "reservation_date": ["booking_date", "booking date"],
+    "check_in_date": ["check_in", "checkin"],
+    "check_out_date": ["checkout", "check_out"],
+    "room_revenue": ["rev"],
+    "room_nights": ["nights"],
+    "listing_name": ["unit_name"],
+    "channel": ["channel"],
+    "status": ["status"]
+  },
+  "defaults": {
+    "property_name": "ATX"
+  },
+  "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"]
+}

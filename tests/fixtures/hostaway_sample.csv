@@ -1,6 +1,0 @@
-Guest,Channel,Reservation status,Payment status,Check-in date,Check-out date,Listing,Reservation date,rentalRevenue,Nights,Listing Name
-Guest A,direct,new,Paid,2025-07-04,2025-07-06,Unit A,2025-06-01,400,2,Unit A
-Guest B,airbnb,new,Unpaid,2025-07-04,2025-07-05,Unit B,2025-06-15,300,1,Unit B
-Guest C,direct,new,Unknown,2025-07-05,2025-07-07,Unit C,2025-06-20,500,2,Unit C
-Guest D,direct,new,Paid,2024-07-04,2024-07-06,Unit A,2024-05-01,350,2,Unit A
-Guest E,direct,new,Paid,2025-08-01,2025-08-03,Unit D,2025-07-01,600,2,Unit D

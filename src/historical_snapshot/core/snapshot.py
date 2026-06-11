@@ -19,6 +19,7 @@ def snapshot_to_dict(snapshot: SnapshotMetrics) -> dict:
             "start": snapshot.start_date.isoformat(),
             "end": snapshot.end_date.isoformat(),
         },
+        "as_of_date": snapshot.as_of_date.isoformat() if snapshot.as_of_date else None,
         "bookings_count": snapshot.bookings_count,
         "room_nights_sold": snapshot.room_nights_sold,
         "room_revenue": _decimal_to_float(snapshot.room_revenue),

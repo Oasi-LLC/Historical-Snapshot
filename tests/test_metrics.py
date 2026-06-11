@@ -99,6 +99,61 @@ def test_arrival_basis_uses_check_in_only():
     assert stay.bookings_count >= arrival.bookings_count
 
 
+def test_as_of_date_limits_bookings_to_on_the_books_pace():
+    record = BookingRecord(
+        property_id="P001",
+        property_name="Hotel One",
+        listing_name="Unit A",
+        channel="Direct",
+        grouping="Suite",
+        reservation_date=date(2025, 6, 1),
+        booking_date=date(2025, 6, 1),
+        check_in_date=date(2025, 7, 4),
+        check_out_date=date(2025, 7, 6),
+        room_revenue=Decimal("1000.00"),
+        room_nights=2,
+        status="confirmed",
+    )
+    late_record = BookingRecord(
+        property_id="P001",
+        property_name="Hotel One",
+        listing_name="Unit B",
+        channel="Direct",
+        grouping="Suite",
+        reservation_date=date(2025, 7, 1),
+        booking_date=date(2025, 7, 1),
+        check_in_date=date(2025, 7, 4),
+        check_out_date=date(2025, 7, 5),
+        room_revenue=Decimal("500.00"),
+        room_nights=1,
+        status="confirmed",
+    )
+
+    full = compute_snapshot_metrics(
+        records=[record, late_record],
+        property_id="P001",
+        start_date=date(2025, 7, 4),
+        end_date=date(2025, 7, 5),
+        bands=parse_bands("0-7"),
+        date_basis="stay",
+        inventory_units=1,
+    )
+    paced = compute_snapshot_metrics(
+        records=[record, late_record],
+        property_id="P001",
+        start_date=date(2025, 7, 4),
+        end_date=date(2025, 7, 5),
+        bands=parse_bands("0-7"),
+        date_basis="stay",
+        inventory_units=1,
+        as_of_date=date(2025, 6, 5),
+    )
+
+    assert full.bookings_count == 2
+    assert paced.bookings_count == 1
+    assert paced.as_of_date == date(2025, 6, 5)
+
+
 def test_zero_denominators_return_none_metrics():
     records, _ = read_bookings_csv(FIXTURES / "bookings_sample.csv")
     snapshot = compute_snapshot_metrics(

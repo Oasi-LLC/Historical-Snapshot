@@ -1,0 +1,31 @@
+{
+  "folder": "ATX",
+  "pms": "hostaway",
+  "property_id": "ATX",
+  "property_name": "ATX",
+  "inventory_mode": "manual",
+  "default_inventory_listings": 2,
+  "listing_inventory": {
+    "Sunstrip": 1,
+    "Malvern (4BR)": 1,
+    "Malvern (3BR)": 1
+  },
+  "data_sources": [
+    {"file": "track_data.csv", "pms": "track"},
+    {"file": "hostaway_data.csv", "pms": "hostaway"}
+  ],
+  "listing_aliases": {
+    "Malvern": "Malvern (4BR)",
+    "MLVRN (3BR in Loft + Airstream)": "Malvern (3BR)"
+  },
+  "allowed_listings": ["Sunstrip", "Malvern (4BR)", "Malvern (3BR)"],
+  "allowed_reservation_statuses": ["new", "modified", "checked out"],
+  "allowed_payment_statuses": ["paid", "partially paid"],
+  "default_channel": "Airbnb",
+  "dedupe_stays": true,
+  "exclude_zero_revenue": true,
+  "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"],
+  "defaults": {
+    "breakdown_by": "listing"
+  }
+}

@@ -17,9 +17,12 @@ class Band:
         return days <= self.max_days
 
 
+DEFAULT_BANDS = "0,1-3,4-7,8-15,16-30,31-60,61+"
+
+
 def parse_bands(raw: str | None) -> list[Band]:
     if not raw:
-        raw = "0-7,8-15,16-30,31-60,61+"
+        raw = DEFAULT_BANDS
 
     bands: list[Band] = []
     for item in raw.split(","):
@@ -29,6 +32,9 @@ def parse_bands(raw: str | None) -> list[Band]:
         if token.endswith("+"):
             min_days = int(token[:-1])
             bands.append(Band(label=token, min_days=min_days, max_days=None))
+        elif "-" not in token:
+            day = int(token)
+            bands.append(Band(label=token, min_days=day, max_days=day))
         else:
             start_raw, end_raw = token.split("-", maxsplit=1)
             start, end = int(start_raw), int(end_raw)

@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from historical_snapshot.core.bands import DEFAULT_BANDS
 from historical_snapshot.service import DEFAULT_DATA_ROOT, discover_properties, list_listings, run_snapshot
 
 app = FastAPI(
@@ -53,12 +54,11 @@ def get_snapshot(
     property_name: str = Query(default="LaFave"),
     date_basis: str = Query(default="stay", pattern="^(stay|arrival|reservation)$"),
     breakdown_by: str = Query(default="listing", pattern="^(listing|grouping)$"),
-    bands: str = Query(default="0-7,8-15,16-30,31-60,61+"),
+    bands: str = Query(default=DEFAULT_BANDS),
     inventory_listings: int = Query(default=30, ge=1),
-    inventory_mode: Optional[str] = Query(
+    as_of_date: Optional[str] = Query(
         default=None,
-        pattern="^(manual|active_listings)$",
-        description="Override property config inventory mode",
+        description="Only include bookings reserved on or before this date (YYYY-MM-DD)",
     ),
 ) -> dict:
     path = Path(csv_path)
@@ -75,7 +75,7 @@ def get_snapshot(
             breakdown_by=breakdown_by,
             bands=bands,
             inventory_listings=inventory_listings,
-            inventory_mode=inventory_mode,  # type: ignore[arg-type]
+            as_of_date=as_of_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

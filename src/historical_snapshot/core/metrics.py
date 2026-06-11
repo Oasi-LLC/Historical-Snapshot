@@ -41,6 +41,7 @@ class SnapshotMetrics:
     los_distribution: dict[str, int]
     arrival_day_of_week_mix: dict[str, int]
     channel_mix: dict[str, dict[str, Decimal | int | None]]
+    as_of_date: date | None = None
 
 
 def _safe_div(numerator: Decimal, denominator: Decimal) -> Decimal | None:
@@ -92,39 +93,6 @@ def stay_overlaps_range(record: BookingRecord, start_date: date, end_date: date)
     return record.check_in_date <= end_date and record.check_out_date > start_date
 
 
-def count_active_listings(
-    records: list[BookingRecord],
-    start_date: date,
-    end_date: date,
-) -> int:
-    """Listings whose booking history overlaps the snapshot window.
-
-    Uses first check-in and last check-out across all ingested bookings so YoY
-    periods only include units that were on the books during each window.
-    """
-    first_check_in: dict[str, date] = {}
-    last_check_out: dict[str, date] = {}
-    for record in records:
-        if record.status in CANCELLED_STATUSES:
-            continue
-        listing = (record.listing_name or record.property_id).strip()
-        if not listing:
-            continue
-        current_first = first_check_in.get(listing)
-        if current_first is None or record.check_in_date < current_first:
-            first_check_in[listing] = record.check_in_date
-        current_last = last_check_out.get(listing)
-        if current_last is None or record.check_out_date > current_last:
-            last_check_out[listing] = record.check_out_date
-
-    active = 0
-    for listing, first in first_check_in.items():
-        last = last_check_out[listing]
-        if first <= end_date and last > start_date:
-            active += 1
-    return max(active, 1)
-
-
 def nights_in_range(record: BookingRecord, start_date: date, end_date: date) -> int:
     """Occupied nights from check-in through night before check-out, clipped to the range."""
     overlap_start = max(record.check_in_date, start_date)
@@ -164,6 +132,7 @@ def compute_snapshot_metrics(
     bands: list[Band],
     date_basis: DateBasis = "stay",
     inventory_units: int | None = None,
+    as_of_date: date | None = None,
 ) -> SnapshotMetrics:
     filtered = [
         r
@@ -171,6 +140,7 @@ def compute_snapshot_metrics(
         if r.property_id == property_id
         and _matches_date_filter(r, start_date, end_date, date_basis)
         and r.status not in CANCELLED_STATUSES
+        and (as_of_date is None or r.reservation_date <= as_of_date)
     ]
 
     property_name = filtered[0].property_name if filtered else ""
@@ -277,6 +247,7 @@ def compute_snapshot_metrics(
         los_distribution=dict(los_dist),
         arrival_day_of_week_mix=dict(arrival_dow),
         channel_mix=channel_mix,
+        as_of_date=as_of_date,
     )
 
 
@@ -288,6 +259,7 @@ def compute_portfolio_snapshot_metrics(
     bands: list[Band],
     date_basis: DateBasis = "stay",
     inventory_units: int | None = None,
+    as_of_date: date | None = None,
 ) -> SnapshotMetrics:
     synthetic = "__portfolio__"
     lifted: list[BookingRecord] = []
@@ -317,4 +289,5 @@ def compute_portfolio_snapshot_metrics(
         bands=bands,
         date_basis=date_basis,
         inventory_units=inventory_units,
+        as_of_date=as_of_date,
     )

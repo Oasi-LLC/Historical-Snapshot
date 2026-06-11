@@ -9,7 +9,17 @@ CONFIG_ROOT = Path(__file__).resolve().parents[2] / "config"
 PMS_DIR = CONFIG_ROOT / "pms"
 PROPERTIES_DIR = CONFIG_ROOT / "properties"
 
-InventoryMode = str  # "manual" | "active_listings"
+InventoryMode = str  # "manual"
+
+
+@dataclass(frozen=True)
+class DataSource:
+    file: str
+    pms: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DataSource:
+        return cls(file=data["file"], pms=data["pms"])
 
 
 @dataclass(frozen=True)
@@ -17,6 +27,7 @@ class PmsProfile:
     id: str
     column_aliases: dict[str, list[str]]
     defaults: dict[str, str] = field(default_factory=dict)
+    date_formats: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PmsProfile:
@@ -24,6 +35,7 @@ class PmsProfile:
             id=data["id"],
             column_aliases={key: list(values) for key, values in data["column_aliases"].items()},
             defaults=dict(data.get("defaults", {})),
+            date_formats=tuple(data.get("date_formats", ())),
         )
 
 
@@ -35,16 +47,25 @@ class PropertyConfig:
     property_name: str
     inventory_mode: InventoryMode = "manual"
     default_inventory_listings: int | None = None
-    exclude_payment_status: frozenset[str] = frozenset()
+    listing_inventory: dict[str, int] = field(default_factory=dict)
+    listing_groups: dict[str, str] = field(default_factory=dict)
+    grouping_inventory: dict[str, int] = field(default_factory=dict)
+    listing_aliases: dict[str, str] = field(default_factory=dict)
+    allowed_listings: tuple[str, ...] = ()
+    data_sources: tuple[DataSource, ...] = ()
+    allowed_reservation_statuses: tuple[str, ...] = ()
+    allowed_payment_statuses: tuple[str, ...] = ()
+    default_channel: str = ""
+    dedupe_stays: bool = False
+    exclude_zero_revenue: bool = False
+    excluded_statuses: tuple[str, ...] = ()
+    split_multi_listings: bool = False
+    date_formats: tuple[str, ...] = ()
     defaults: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PropertyConfig:
-        excluded = {
-            value.strip().lower()
-            for value in data.get("exclude_payment_status", [])
-            if str(value).strip()
-        }
+        excluded = data.get("excluded_statuses", ())
         return cls(
             folder=data["folder"],
             pms=data["pms"],
@@ -52,21 +73,80 @@ class PropertyConfig:
             property_name=data["property_name"],
             inventory_mode=data.get("inventory_mode", "manual"),
             default_inventory_listings=data.get("default_inventory_listings"),
-            exclude_payment_status=frozenset(excluded),
+            listing_inventory={
+                str(key): int(value) for key, value in data.get("listing_inventory", {}).items()
+            },
+            listing_groups={
+                str(key): str(value) for key, value in data.get("listing_groups", {}).items()
+            },
+            grouping_inventory={
+                str(key): int(value) for key, value in data.get("grouping_inventory", {}).items()
+            },
+            listing_aliases={
+                str(key): str(value) for key, value in data.get("listing_aliases", {}).items()
+            },
+            allowed_listings=tuple(str(name) for name in data.get("allowed_listings", ())),
+            data_sources=tuple(
+                DataSource.from_dict(item) for item in data.get("data_sources", ())
+            ),
+            allowed_reservation_statuses=tuple(
+                str(status).strip().lower()
+                for status in data.get("allowed_reservation_statuses", ())
+            ),
+            allowed_payment_statuses=tuple(
+                str(status).strip().lower()
+                for status in data.get("allowed_payment_statuses", ())
+            ),
+            default_channel=str(data.get("default_channel", "")),
+            dedupe_stays=bool(data.get("dedupe_stays", False)),
+            exclude_zero_revenue=bool(data.get("exclude_zero_revenue", False)),
+            excluded_statuses=tuple(str(status) for status in excluded),
+            split_multi_listings=bool(data.get("split_multi_listings", False)),
+            date_formats=tuple(data.get("date_formats", ())),
             defaults=dict(data.get("defaults", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "folder": self.folder,
             "pms": self.pms,
             "property_id": self.property_id,
             "property_name": self.property_name,
             "inventory_mode": self.inventory_mode,
             "default_inventory_listings": self.default_inventory_listings,
-            "exclude_payment_status": sorted(self.exclude_payment_status),
             "defaults": self.defaults,
         }
+        if self.listing_inventory:
+            payload["listing_inventory"] = dict(self.listing_inventory)
+        if self.listing_groups:
+            payload["listing_groups"] = dict(self.listing_groups)
+        if self.grouping_inventory:
+            payload["grouping_inventory"] = dict(self.grouping_inventory)
+        if self.listing_aliases:
+            payload["listing_aliases"] = dict(self.listing_aliases)
+        if self.allowed_listings:
+            payload["allowed_listings"] = list(self.allowed_listings)
+        if self.data_sources:
+            payload["data_sources"] = [
+                {"file": source.file, "pms": source.pms} for source in self.data_sources
+            ]
+        if self.allowed_reservation_statuses:
+            payload["allowed_reservation_statuses"] = list(self.allowed_reservation_statuses)
+        if self.allowed_payment_statuses:
+            payload["allowed_payment_statuses"] = list(self.allowed_payment_statuses)
+        if self.default_channel:
+            payload["default_channel"] = self.default_channel
+        if self.dedupe_stays:
+            payload["dedupe_stays"] = True
+        if self.exclude_zero_revenue:
+            payload["exclude_zero_revenue"] = True
+        if self.excluded_statuses:
+            payload["excluded_statuses"] = list(self.excluded_statuses)
+        if self.split_multi_listings:
+            payload["split_multi_listings"] = True
+        if self.date_formats:
+            payload["date_formats"] = list(self.date_formats)
+        return payload
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -108,7 +188,20 @@ def resolve_property_config(
             property_name=property_name or property_config.property_name,
             inventory_mode=property_config.inventory_mode,
             default_inventory_listings=property_config.default_inventory_listings,
-            exclude_payment_status=property_config.exclude_payment_status,
+            listing_inventory=property_config.listing_inventory,
+            listing_groups=property_config.listing_groups,
+            grouping_inventory=property_config.grouping_inventory,
+            listing_aliases=property_config.listing_aliases,
+            allowed_listings=property_config.allowed_listings,
+            data_sources=property_config.data_sources,
+            allowed_reservation_statuses=property_config.allowed_reservation_statuses,
+            allowed_payment_statuses=property_config.allowed_payment_statuses,
+            default_channel=property_config.default_channel,
+            dedupe_stays=property_config.dedupe_stays,
+            exclude_zero_revenue=property_config.exclude_zero_revenue,
+            excluded_statuses=property_config.excluded_statuses,
+            split_multi_listings=property_config.split_multi_listings,
+            date_formats=property_config.date_formats,
             defaults=property_config.defaults,
         )
     return property_config, pms_profile

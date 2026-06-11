@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import csv
+import io
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
 from historical_snapshot.config import PmsProfile, PropertyConfig, load_pms_profile
+from historical_snapshot.io.postprocess import apply_property_postprocess
 from historical_snapshot.models import BookingRecord, ValidationIssue
 
 # Baseline aliases used when no PMS profile is supplied (tests, generic CSVs).
@@ -34,7 +36,6 @@ BASE_SCHEMA_ALIASES: dict[str, set[str]] = {
         "available_nights",
         "inventory_room_nights",
     },
-    "payment_status": {"payment_status", "payment status"},
 }
 
 REQUIRED_FIELDS = {
@@ -77,14 +78,32 @@ def _resolve_columns(fieldnames: Iterable[str], aliases: dict[str, set[str]]) ->
     return mapping
 
 
-def _parse_date(value: str) -> datetime.date:
-    patterns = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%m/%d/%y", "%m/%d/%y %H:%M")
+DEFAULT_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%m/%d/%y", "%m/%d/%y %H:%M")
+
+
+def _parse_date(value: str, *, patterns: tuple[str, ...] = DEFAULT_DATE_FORMATS) -> datetime.date:
     for pattern in patterns:
         try:
             return datetime.strptime(value.strip(), pattern).date()
         except ValueError:
             continue
     raise ValueError(f"Invalid date: {value}")
+
+
+WMB_US_DATE_FORMATS = ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d")
+
+
+def _date_patterns_for_profile(
+    pms_profile: PmsProfile | None,
+    property_config: PropertyConfig | None = None,
+) -> tuple[str, ...]:
+    if pms_profile and pms_profile.date_formats:
+        return pms_profile.date_formats
+    if property_config and property_config.date_formats:
+        return property_config.date_formats
+    if property_config and property_config.folder.upper() == "WMB":
+        return WMB_US_DATE_FORMATS
+    return DEFAULT_DATE_FORMATS
 
 
 def _parse_decimal(value: str) -> Decimal:
@@ -102,10 +121,14 @@ def _parse_int(value: str) -> int:
         raise ValueError(f"Invalid int: {value}") from exc
 
 
-def _payment_excluded(raw_status: str, excluded: frozenset[str]) -> bool:
-    if not excluded:
-        return False
-    return raw_status.strip().lower() in excluded
+def _read_csv_text(path: Path) -> str:
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"Unable to decode CSV with a supported encoding: {path}")
 
 
 def read_bookings_csv(
@@ -113,12 +136,13 @@ def read_bookings_csv(
     *,
     property_config: PropertyConfig | None = None,
     pms_profile: PmsProfile | None = None,
+    apply_postprocess: bool = True,
 ) -> tuple[list[BookingRecord], list[ValidationIssue]]:
     if pms_profile is None and property_config is not None:
         pms_profile = load_pms_profile(property_config.pms)
 
     aliases = _aliases_for_profile(pms_profile)
-    excluded_payment = property_config.exclude_payment_status if property_config else frozenset()
+    date_patterns = _date_patterns_for_profile(pms_profile, property_config)
     default_property_name = (
         property_config.property_name
         if property_config
@@ -129,79 +153,92 @@ def read_bookings_csv(
     records: list[BookingRecord] = []
     issues: list[ValidationIssue] = []
 
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if not reader.fieldnames:
-            raise ValueError("CSV has no header row.")
+    csv_text = _read_csv_text(Path(path))
+    reader = csv.DictReader(io.StringIO(csv_text, newline=""))
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row.")
 
-        column_map = _resolve_columns(reader.fieldnames, aliases)
-        for row_number, row in enumerate(reader, start=2):
-            try:
-                if "payment_status" in column_map:
-                    payment_status = row[column_map["payment_status"]].strip()
-                    if _payment_excluded(payment_status, excluded_payment):
-                        continue
+    column_map = _resolve_columns(reader.fieldnames, aliases)
+    for row_number, row in enumerate(reader, start=2):
+        try:
+            booking_date = _parse_date(row[column_map["booking_date"]], patterns=date_patterns)
+            if "reservation_date" in column_map:
+                reservation_date = _parse_date(
+                    row[column_map["reservation_date"]], patterns=date_patterns
+                )
+            else:
+                reservation_date = booking_date
+            check_in_date = _parse_date(row[column_map["check_in_date"]], patterns=date_patterns)
+            check_out_date = _parse_date(row[column_map["check_out_date"]], patterns=date_patterns)
+            raw_revenue = row[column_map["room_revenue"]].strip()
+            room_revenue = Decimal("0") if not raw_revenue else _parse_decimal(raw_revenue)
+            room_nights = _parse_int(row[column_map["room_nights"]])
+            available_room_nights = None
+            if "available_room_nights" in column_map:
+                raw_avail = row[column_map["available_room_nights"]].strip()
+                if raw_avail:
+                    available_room_nights = _parse_int(raw_avail)
 
-                booking_date = _parse_date(row[column_map["booking_date"]])
-                if "reservation_date" in column_map:
-                    reservation_date = _parse_date(row[column_map["reservation_date"]])
-                else:
-                    reservation_date = booking_date
-                check_in_date = _parse_date(row[column_map["check_in_date"]])
-                check_out_date = _parse_date(row[column_map["check_out_date"]])
-                room_revenue = _parse_decimal(row[column_map["room_revenue"]])
-                room_nights = _parse_int(row[column_map["room_nights"]])
-                available_room_nights = None
-                if "available_room_nights" in column_map:
-                    raw_avail = row[column_map["available_room_nights"]].strip()
-                    if raw_avail:
-                        available_room_nights = _parse_int(raw_avail)
+            if check_out_date <= check_in_date:
+                raise ValueError("check_out_date must be after check_in_date")
+            if room_nights < 0:
+                raise ValueError("room_nights cannot be negative")
+            if room_revenue < 0:
+                continue
 
-                if check_out_date <= check_in_date:
-                    raise ValueError("check_out_date must be after check_in_date")
-                if room_nights < 0:
-                    raise ValueError("room_nights cannot be negative")
-                if room_revenue < 0:
+            property_id = row.get(column_map.get("property_id", ""), "").strip()
+            property_name = row.get(column_map.get("property_name", ""), "").strip()
+            listing_name = row.get(column_map.get("listing_name", ""), "").strip()
+            channel = row.get(column_map.get("channel", ""), "").strip()
+            grouping = row.get(column_map.get("grouping", ""), "").strip()
+            status = (
+                row.get(column_map.get("status", ""), "").strip().lower()
+                if "status" in column_map
+                else "confirmed"
+            )
+
+            if not listing_name and "listing_name" not in column_map:
+                listing_name = row.get("Listing Name", "").strip()
+            if not property_name:
+                property_name = default_property_name or "LaFave"
+            if not property_id:
+                property_id = default_property_id or listing_name or property_name
+            if not status:
+                status = "confirmed"
+
+            if property_config and property_config.allowed_reservation_statuses:
+                if status not in property_config.allowed_reservation_statuses:
                     continue
 
-                property_id = row.get(column_map.get("property_id", ""), "").strip()
-                property_name = row.get(column_map.get("property_name", ""), "").strip()
-                listing_name = row.get(column_map.get("listing_name", ""), "").strip()
-                channel = row.get(column_map.get("channel", ""), "").strip()
-                grouping = row.get(column_map.get("grouping", ""), "").strip()
-                status = (
-                    row.get(column_map.get("status", ""), "").strip().lower()
-                    if "status" in column_map
-                    else "confirmed"
+            if (
+                property_config
+                and property_config.allowed_payment_statuses
+                and "payment_status" in column_map
+            ):
+                payment_status = row[column_map["payment_status"]].strip().lower()
+                if payment_status not in property_config.allowed_payment_statuses:
+                    continue
+
+            records.append(
+                BookingRecord(
+                    property_id=property_id,
+                    property_name=property_name,
+                    listing_name=listing_name or property_id,
+                    channel=channel,
+                    grouping=grouping,
+                    reservation_date=reservation_date,
+                    booking_date=booking_date,
+                    check_in_date=check_in_date,
+                    check_out_date=check_out_date,
+                    room_revenue=room_revenue,
+                    room_nights=room_nights,
+                    status=status,
+                    available_room_nights=available_room_nights,
                 )
+            )
+        except (KeyError, ValueError) as exc:
+            issues.append(ValidationIssue(row_number=row_number, reason=str(exc)))
 
-                if not listing_name and "listing_name" not in column_map:
-                    listing_name = row.get("Listing Name", "").strip()
-                if not property_name:
-                    property_name = default_property_name or "LaFave"
-                if not property_id:
-                    property_id = default_property_id or listing_name or property_name
-                if not status:
-                    status = "confirmed"
-
-                records.append(
-                    BookingRecord(
-                        property_id=property_id,
-                        property_name=property_name,
-                        listing_name=listing_name or property_id,
-                        channel=channel,
-                        grouping=grouping,
-                        reservation_date=reservation_date,
-                        booking_date=booking_date,
-                        check_in_date=check_in_date,
-                        check_out_date=check_out_date,
-                        room_revenue=room_revenue,
-                        room_nights=room_nights,
-                        status=status,
-                        available_room_nights=available_room_nights,
-                    )
-                )
-            except (KeyError, ValueError) as exc:
-                issues.append(ValidationIssue(row_number=row_number, reason=str(exc)))
-
+    if apply_postprocess:
+        records = apply_property_postprocess(records, property_config)
     return records, issues

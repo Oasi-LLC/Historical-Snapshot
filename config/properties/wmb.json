@@ -1,0 +1,35 @@
+{
+  "folder": "WMB",
+  "pms": "wmb",
+  "property_id": "WMB",
+  "property_name": "Onera Wimberley",
+  "inventory_mode": "manual",
+  "default_inventory_listings": 28,
+  "listing_inventory": {
+    "Greenhouse": 9,
+    "Greenhouse (Accessible)": 1,
+    "Greenhouse (Pet Friendly)": 6,
+    "Spyglass": 5,
+    "Spyglass (Accessible)": 1,
+    "Spyglass (Pet Friendly)": 6
+  },
+  "listing_groups": {
+    "Greenhouse": "Greenhouse",
+    "Greenhouse (Accessible)": "Greenhouse",
+    "Greenhouse (Pet Friendly)": "Greenhouse",
+    "Spyglass": "Spyglass",
+    "Spyglass (Accessible)": "Spyglass",
+    "Spyglass (Pet Friendly)": "Spyglass"
+  },
+  "grouping_inventory": {
+    "Greenhouse": 16,
+    "Spyglass": 12
+  },
+  "exclude_zero_revenue": true,
+  "excluded_statuses": ["cancelled", "confirmation pending"],
+  "split_multi_listings": true,
+  "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"],
+  "defaults": {
+    "breakdown_by": "listing"
+  }
+}

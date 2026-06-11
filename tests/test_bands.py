@@ -25,13 +25,28 @@ def test_booking_window_is_arrival_minus_reservation():
     assert booking_window_days_for_record(record) == 43
 
 
-def test_days_in_zero_band():
-    bands = parse_bands("0-7,8-15,16-30,31-60,61+")
-    assert band_for_days(5, bands) == "0-7"
+def test_default_bands_are_granular():
+    bands = parse_bands(None)
+    assert [band.label for band in bands] == ["0", "1-3", "4-7", "8-15", "16-30", "31-60", "61+"]
+
+
+def test_single_day_band():
+    bands = parse_bands("0")
+    assert band_for_days(0, bands) == "0"
+    assert bands[0].includes(0)
+    assert not bands[0].includes(1)
+
+
+def test_days_in_expected_bands():
+    bands = parse_bands("0,1-3,4-7,8-15,16-30,31-60,61+")
+    assert band_for_days(0, bands) == "0"
+    assert band_for_days(2, bands) == "1-3"
+    assert band_for_days(5, bands) == "4-7"
+    assert band_for_days(10, bands) == "8-15"
     assert band_for_days(61, bands) == "61+"
 
 
 def test_days_outside_all_closed_bands_use_last_after_check():
-    bands = parse_bands("0-7,8-15,16-30,31-60,61+")
+    bands = parse_bands("0,1-3,4-7,8-15,16-30,31-60,61+")
     assert band_for_days(-5, bands) == "61+"
     assert band_for_days(10_000, bands) == "61+"

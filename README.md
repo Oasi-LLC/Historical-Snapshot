@@ -54,19 +54,19 @@ PYTHONPATH=src uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```bash
 source .venv/bin/activate
 cd /path/to/Historical-Snapshot
-SNAPSHOT_API_URL=http://127.0.0.1:8000 streamlit run dashboard/app.py --server.port 8501
+./scripts/run_dashboard.sh
 ```
 
-Open **http://localhost:8501**, choose property and dates in the sidebar, then click **Run snapshot**.
+Open **http://localhost:8502**, choose property and dates in the sidebar, then click **Run snapshot**.
 
 For teammates on the same Wi‑Fi/LAN, bind to all interfaces:
 
 ```bash
 PYTHONPATH=src uvicorn api.main:app --host 0.0.0.0 --port 8000
-streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+SNAPSHOT_API_URL=http://127.0.0.1:8000 streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8502
 ```
 
-Then use `http://<your-machine-ip>:8501` from another device.
+Then use `http://<your-machine-ip>:8502` from another device.
 
 ## Project layout
 
@@ -164,7 +164,7 @@ docker compose up --build
 ```
 
 - API: http://localhost:8000  
-- Dashboard: http://localhost:8501  
+- Dashboard: http://localhost:8502  
 
 The compose file sets `SNAPSHOT_API_URL=http://api:8000` for the dashboard container.
 
@@ -176,8 +176,6 @@ Portfolio CSVs are **not committed** (booking/revenue data stays local). After c
 data/
   lafave/
     lafave_main_data.csv
-  flohom/
-    flohom_main_data.csv
 ```
 
 Add more properties as `data/<property_id>/*.csv`. Column mapping and defaults live in `config/properties/<folder>.json` and `config/pms/`. The API discovers folders via `GET /properties?data_root=data`.
@@ -195,7 +193,7 @@ No `data/` CSV required — fixtures cover unit and API tests.
 
 ## Canonical CSV columns
 
-LaFave-style exports use the `lafave` PMS profile; Hostaway exports (e.g. Flohom) use `config/pms/hostaway.json` and `config/properties/flohom.json`.
+LaFave-style exports use the `lafave` PMS profile (`config/pms/lafave.json` and `config/properties/lafave.json`).
 
 **Required (or mapped aliases):** arrival/check-in, departure/check-out, amount, nights, listing name.
 

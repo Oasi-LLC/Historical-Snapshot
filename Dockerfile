@@ -13,4 +13,4 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 ENV PYTHONPATH=/app/src
 
-EXPOSE 8000 8501
+EXPOSE 8000 8502

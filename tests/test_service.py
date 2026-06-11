@@ -4,8 +4,6 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 from historical_snapshot.service import discover_properties, run_snapshot
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -33,11 +31,8 @@ def test_discover_properties_finds_lafave():
     assert "LAFAVE" in ids
 
 
-def test_discover_properties_includes_flohom_config():
+def test_discover_properties_finds_wmb():
     properties = discover_properties(DATA_ROOT)
-    flohom = next((p for p in properties if p["id"] == "FLOHOM"), None)
-    if flohom is None:
-        pytest.skip("local flohom data folder not present")
-    assert flohom["name"] == "Flohom"
-    assert flohom["inventory_mode"] == "active_listings"
-    assert flohom["pms"] == "hostaway"
+    ids = [p["id"] for p in properties]
+    assert "WMB" in ids
+

@@ -6,13 +6,11 @@
     "check_out_date": ["check_out_date", "checkout_date"],
     "room_revenue": ["rentalrevenue", "rental_revenue"],
     "room_nights": ["nights"],
-    "listing_name": ["listing"],
+    "listing_name": ["listing_name", "listing"],
     "channel": ["channel"],
     "status": ["reservation_status", "reservation status"],
     "payment_status": ["payment_status", "payment status"]
   },
-  "defaults": {
-    "property_name": "ATX"
-  },
+  "defaults": {},
   "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"]
 }

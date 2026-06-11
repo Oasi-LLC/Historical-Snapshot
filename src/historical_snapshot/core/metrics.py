@@ -88,6 +88,109 @@ def _los_bucket(nights: int) -> str:
     return "4+"
 
 
+def listing_available_nights_in_window(
+    live_date: date,
+    start_date: date,
+    end_date: date,
+) -> int:
+    """Nights a unit counts toward inventory within [start_date, end_date]."""
+    effective_start = max(start_date, live_date)
+    if effective_start > end_date:
+        return 0
+    return (end_date - effective_start).days + 1
+
+
+def live_listings_in_scope(
+    listing_live_dates: dict[str, date],
+    start_date: date,
+    end_date: date,
+) -> frozenset[str]:
+    """Listing names with at least one available night in the snapshot window."""
+    return frozenset(
+        name
+        for name, live_date in listing_live_dates.items()
+        if listing_available_nights_in_window(live_date, start_date, end_date) > 0
+    )
+
+
+def comparable_live_listings(
+    listing_live_dates: dict[str, date],
+    start_date: date,
+    end_date: date,
+    yoy_start_date: date,
+    yoy_end_date: date,
+) -> frozenset[str]:
+    """Units in scope for both the measured period and the YoY comparison period."""
+    current = live_listings_in_scope(listing_live_dates, start_date, end_date)
+    other = live_listings_in_scope(listing_live_dates, yoy_start_date, yoy_end_date)
+    return current & other
+
+
+def count_live_listings_in_scope(
+    listing_live_dates: dict[str, date],
+    start_date: date,
+    end_date: date,
+    *,
+    listings: Iterable[str] | None = None,
+) -> int:
+    """Units with at least one available night in the snapshot window."""
+    if listings is not None:
+        return sum(
+            1
+            for name in listings
+            if name in listing_live_dates
+            and listing_available_nights_in_window(
+                listing_live_dates[name], start_date, end_date
+            )
+            > 0
+        )
+    return len(live_listings_in_scope(listing_live_dates, start_date, end_date))
+
+
+def total_available_room_nights(
+    listing_live_dates: dict[str, date],
+    start_date: date,
+    end_date: date,
+    *,
+    listings: Iterable[str] | None = None,
+) -> int:
+    keys = listings if listings is not None else listing_live_dates.keys()
+    return sum(
+        listing_available_nights_in_window(listing_live_dates[listing], start_date, end_date)
+        for listing in keys
+        if listing in listing_live_dates
+    )
+
+
+def count_active_listings(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+) -> int:
+    """Listings whose booking history overlaps the snapshot window."""
+    first_check_in: dict[str, date] = {}
+    last_check_out: dict[str, date] = {}
+    for record in records:
+        if record.status in CANCELLED_STATUSES:
+            continue
+        listing = (record.listing_name or record.property_id).strip()
+        if not listing:
+            continue
+        current_first = first_check_in.get(listing)
+        if current_first is None or record.check_in_date < current_first:
+            first_check_in[listing] = record.check_in_date
+        current_last = last_check_out.get(listing)
+        if current_last is None or record.check_out_date > current_last:
+            last_check_out[listing] = record.check_out_date
+
+    active = 0
+    for listing, first in first_check_in.items():
+        last = last_check_out[listing]
+        if first <= end_date and last > start_date:
+            active += 1
+    return max(active, 1)
+
+
 def stay_overlaps_range(record: BookingRecord, start_date: date, end_date: date) -> bool:
     """True when the booking occupies at least one night in [start_date, end_date]."""
     return record.check_in_date <= end_date and record.check_out_date > start_date
@@ -132,6 +235,7 @@ def compute_snapshot_metrics(
     bands: list[Band],
     date_basis: DateBasis = "stay",
     inventory_units: int | None = None,
+    available_room_nights: int | None = None,
     as_of_date: date | None = None,
 ) -> SnapshotMetrics:
     filtered = [
@@ -155,7 +259,9 @@ def compute_snapshot_metrics(
         room_nights_sold = sum(r.room_nights for r in filtered)
         room_revenue = sum((r.room_revenue for r in filtered), start=Decimal("0"))
 
-    if inventory_units is not None:
+    if available_room_nights is not None:
+        available_room_nights_total = max(available_room_nights, 0)
+    elif inventory_units is not None:
         nights_in_window = (end_date - start_date).days + 1
         available_room_nights_total = max(nights_in_window, 0) * inventory_units
     else:
@@ -259,6 +365,7 @@ def compute_portfolio_snapshot_metrics(
     bands: list[Band],
     date_basis: DateBasis = "stay",
     inventory_units: int | None = None,
+    available_room_nights: int | None = None,
     as_of_date: date | None = None,
 ) -> SnapshotMetrics:
     synthetic = "__portfolio__"
@@ -289,5 +396,6 @@ def compute_portfolio_snapshot_metrics(
         bands=bands,
         date_basis=date_basis,
         inventory_units=inventory_units,
+        available_room_nights=available_room_nights,
         as_of_date=as_of_date,
     )

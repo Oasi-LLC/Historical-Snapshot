@@ -60,6 +60,18 @@ def get_snapshot(
         default=None,
         description="Only include bookings reserved on or before this date (YYYY-MM-DD)",
     ),
+    yoy_compare_start_date: Optional[str] = Query(
+        default=None,
+        description="YoY comparison period start (YYYY-MM-DD); limits live_listings to units in scope in both periods",
+    ),
+    yoy_compare_end_date: Optional[str] = Query(
+        default=None,
+        description="YoY comparison period end (YYYY-MM-DD)",
+    ),
+    property_folder: Optional[str] = Query(
+        default=None,
+        description="Property config folder name (e.g. flohom, WMB)",
+    ),
 ) -> dict:
     path = Path(csv_path)
     if not path.is_file():
@@ -76,6 +88,9 @@ def get_snapshot(
             bands=bands,
             inventory_listings=inventory_listings,
             as_of_date=as_of_date,
+            property_folder=property_folder,
+            yoy_compare_start_date=yoy_compare_start_date,
+            yoy_compare_end_date=yoy_compare_end_date,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -9,8 +9,7 @@ dependencies = []
 [project.optional-dependencies]
 api = ["fastapi>=0.115.0", "uvicorn[standard]>=0.32.0"]
 dashboard = ["streamlit>=1.40.0", "pandas>=2.0.0", "requests>=2.32.0"]
-dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
-all = ["historical-snapshot-cli[api,dashboard,dev]"]
+all = ["historical-snapshot-cli[api,dashboard]"]
 
 [project.scripts]
 snapshot = "historical_snapshot.cli:main"
@@ -24,7 +23,3 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src", "."]
-testpaths = ["tests"]

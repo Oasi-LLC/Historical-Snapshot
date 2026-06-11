@@ -96,6 +96,8 @@ def apply_property_postprocess(
     excluded = {status.strip().lower() for status in property_config.excluded_statuses}
     base_listings = frozenset(property_config.listing_inventory.keys())
     allowed_listings = frozenset(property_config.allowed_listings)
+    if property_config.listing_live_dates and not allowed_listings:
+        allowed_listings = frozenset(property_config.listing_live_dates.keys())
 
     filtered: list[BookingRecord] = []
     for record in records:
@@ -104,11 +106,13 @@ def apply_property_postprocess(
         if property_config.exclude_zero_revenue and record.room_revenue <= Decimal("0"):
             continue
         listing_name = _canonical_listing(record.listing_name, property_config.listing_aliases)
+        if allowed_listings and listing_name not in allowed_listings:
+            continue
+        live_date = property_config.listing_live_dates.get(listing_name)
+        if live_date is not None and record.check_in_date < live_date:
+            continue
         channel = property_config.default_channel or _normalized_channel(record.channel)
         filtered.append(_clone_record(record, listing_name=listing_name, channel=channel))
-
-    if allowed_listings:
-        filtered = [record for record in filtered if record.listing_name in allowed_listings]
 
     if property_config.dedupe_stays:
         filtered = _dedupe_stay_records(filtered)

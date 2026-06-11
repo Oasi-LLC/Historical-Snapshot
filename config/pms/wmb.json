@@ -2,11 +2,11 @@
   "id": "wmb",
   "column_aliases": {
     "booking_date": ["reservation_date", "booking_date"],
-    "check_in_date": ["check_in_date"],
-    "check_out_date": ["check_out_date"],
-    "room_revenue": ["revenue"],
+    "check_in_date": ["check_in_date", "check in date"],
+    "check_out_date": ["check_out_date", "check out date"],
+    "room_revenue": ["revenue", "grand_total", "accommodation_total"],
     "room_nights": ["nights"],
-    "listing_name": ["listing_name"],
+    "listing_name": ["listing_name", "room_type"],
     "channel": ["channel_group"],
     "status": ["status"],
     "property_name": ["property"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,18 @@ CONFIG_ROOT = Path(__file__).resolve().parents[2] / "config"
 PMS_DIR = CONFIG_ROOT / "pms"
 PROPERTIES_DIR = CONFIG_ROOT / "properties"
 
-InventoryMode = str  # "manual"
+InventoryMode = str  # "manual" | "active_listings" | "live_listings"
+
+_LIVE_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
+
+
+def parse_config_date(value: str) -> date:
+    for pattern in _LIVE_DATE_FORMATS:
+        try:
+            return datetime.strptime(value.strip(), pattern).date()
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid date: {value}")
 
 
 @dataclass(frozen=True)
@@ -51,6 +63,7 @@ class PropertyConfig:
     listing_groups: dict[str, str] = field(default_factory=dict)
     grouping_inventory: dict[str, int] = field(default_factory=dict)
     listing_aliases: dict[str, str] = field(default_factory=dict)
+    listing_live_dates: dict[str, date] = field(default_factory=dict)
     allowed_listings: tuple[str, ...] = ()
     data_sources: tuple[DataSource, ...] = ()
     allowed_reservation_statuses: tuple[str, ...] = ()
@@ -84,6 +97,10 @@ class PropertyConfig:
             },
             listing_aliases={
                 str(key): str(value) for key, value in data.get("listing_aliases", {}).items()
+            },
+            listing_live_dates={
+                str(key): parse_config_date(value)
+                for key, value in data.get("listing_live_dates", {}).items()
             },
             allowed_listings=tuple(str(name) for name in data.get("allowed_listings", ())),
             data_sources=tuple(
@@ -124,6 +141,10 @@ class PropertyConfig:
             payload["grouping_inventory"] = dict(self.grouping_inventory)
         if self.listing_aliases:
             payload["listing_aliases"] = dict(self.listing_aliases)
+        if self.listing_live_dates:
+            payload["listing_live_dates"] = {
+                key: value.isoformat() for key, value in self.listing_live_dates.items()
+            }
         if self.allowed_listings:
             payload["allowed_listings"] = list(self.allowed_listings)
         if self.data_sources:
@@ -192,6 +213,7 @@ def resolve_property_config(
             listing_groups=property_config.listing_groups,
             grouping_inventory=property_config.grouping_inventory,
             listing_aliases=property_config.listing_aliases,
+            listing_live_dates=property_config.listing_live_dates,
             allowed_listings=property_config.allowed_listings,
             data_sources=property_config.data_sources,
             allowed_reservation_statuses=property_config.allowed_reservation_statuses,

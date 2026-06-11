@@ -1,0 +1,52 @@
+{
+  "folder": "Flohom",
+  "pms": "hostaway",
+  "property_id": "FLOHOM",
+  "property_name": "Flohom",
+  "inventory_mode": "live_listings",
+  "listing_inventory": {
+    "FLOHOM 1": 1,
+    "FLOHOM 2": 1,
+    "FLOHOM 3": 1,
+    "FLOHOM 4": 1,
+    "FLOHOM 5": 1,
+    "FLOHOM 6": 1,
+    "FLOHOM 7": 1,
+    "FLOHOM 8": 1,
+    "FLOHOM 9": 1,
+    "FLOHOM 10": 1,
+    "FLOHOM 11": 1,
+    "FLOHOM 12": 1,
+    "FLOHOM 13": 1,
+    "FLOHOM 14": 1,
+    "FLOHOM 15": 1,
+    "FLOHOM 16": 1,
+    "FLOHOM 17": 1
+  },
+  "listing_live_dates": {
+    "FLOHOM 1": "2024-12-26",
+    "FLOHOM 2": "2024-12-26",
+    "FLOHOM 3": "2024-12-26",
+    "FLOHOM 4": "2025-02-20",
+    "FLOHOM 5": "2025-02-20",
+    "FLOHOM 6": "2025-02-13",
+    "FLOHOM 7": "2025-03-02",
+    "FLOHOM 8": "2025-03-31",
+    "FLOHOM 9": "2025-04-21",
+    "FLOHOM 10": "2025-07-25",
+    "FLOHOM 11": "2025-09-05",
+    "FLOHOM 12": "2025-08-22",
+    "FLOHOM 13": "2026-03-03",
+    "FLOHOM 14": "2025-07-04",
+    "FLOHOM 15": "2026-04-14",
+    "FLOHOM 16": "2026-04-28",
+    "FLOHOM 17": "2026-05-13"
+  },
+  "allowed_payment_statuses": ["paid", "partially paid"],
+  "exclude_zero_revenue": true,
+  "dedupe_stays": true,
+  "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"],
+  "defaults": {
+    "breakdown_by": "listing"
+  }
+}

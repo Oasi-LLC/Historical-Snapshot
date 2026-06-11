@@ -63,11 +63,50 @@ def _normalize(name: str) -> str:
     return normalized
 
 
-def _resolve_columns(fieldnames: Iterable[str], aliases: dict[str, set[str]]) -> dict[str, str]:
+_ALIAS_PRIORITY: dict[str, tuple[str, ...]] = {
+    "listing_name": ("listing_name", "listing"),
+    "booking_date": ("reservation_date", "booking_date", "booked_date", "created_date"),
+}
+
+
+def _ordered_aliases(
+    canonical: str,
+    canonical_aliases: set[str],
+    pms_profile: PmsProfile | None,
+) -> tuple[str, ...]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    if pms_profile and canonical in pms_profile.column_aliases:
+        for alias in pms_profile.column_aliases[canonical]:
+            norm = _normalize(alias)
+            if norm not in seen:
+                ordered.append(norm)
+                seen.add(norm)
+
+    for alias in _ALIAS_PRIORITY.get(canonical, ()):
+        if alias not in seen and alias in canonical_aliases:
+            ordered.append(alias)
+            seen.add(alias)
+
+    for alias in sorted(canonical_aliases):
+        if alias not in seen:
+            ordered.append(alias)
+            seen.add(alias)
+
+    return tuple(ordered)
+
+
+def _resolve_columns(
+    fieldnames: Iterable[str],
+    aliases: dict[str, set[str]],
+    *,
+    pms_profile: PmsProfile | None = None,
+) -> dict[str, str]:
     normalized = {_normalize(name): name for name in fieldnames if name}
     mapping: dict[str, str] = {}
     for canonical, canonical_aliases in aliases.items():
-        for alias in canonical_aliases:
+        for alias in _ordered_aliases(canonical, canonical_aliases, pms_profile):
             if alias in normalized:
                 mapping[canonical] = normalized[alias]
                 break
@@ -121,6 +160,58 @@ def _parse_int(value: str) -> int:
         raise ValueError(f"Invalid int: {value}") from exc
 
 
+def _looks_like_us_date(value: str) -> bool:
+    cleaned = value.strip()
+    return "/" in cleaned and len(cleaned) <= 12 and not cleaned.startswith("$")
+
+
+def _pick_room_revenue(row: dict[str, str], column_map: dict[str, str]) -> str:
+    raw = row[column_map["room_revenue"]].strip()
+    if raw and not _looks_like_us_date(raw):
+        return raw
+    for key in ("grand_total", "accommodation_total"):
+        if key not in column_map:
+            continue
+        alt = row[column_map[key]].strip()
+        if alt and not _looks_like_us_date(alt):
+            return alt
+    return raw
+
+
+def _pick_listing_name(
+    row: dict[str, str],
+    *,
+    pms_profile: PmsProfile | None,
+    default_property_id: str,
+) -> str:
+    candidates: list[str] = ["listing_name", "listing", "room_type"]
+    if pms_profile and "listing_name" in pms_profile.column_aliases:
+        candidates = list(pms_profile.column_aliases["listing_name"])
+    seen: set[str] = set()
+    for alias in candidates:
+        norm = _normalize(alias)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        for key, value in row.items():
+            if _normalize(key) != norm:
+                continue
+            cleaned = (value or "").strip()
+            if cleaned and cleaned != default_property_id:
+                return cleaned
+            break
+    return ""
+
+
+def _pick_status(row: dict[str, str], column_map: dict[str, str]) -> str:
+    status = row.get(column_map.get("status", ""), "").strip()
+    if status and "united states" in status.lower():
+        meal_plan = row.get("Meal Plan", "").strip()
+        if meal_plan:
+            return meal_plan
+    return status
+
+
 def _read_csv_text(path: Path) -> str:
     raw = path.read_bytes()
     for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
@@ -158,7 +249,7 @@ def read_bookings_csv(
     if not reader.fieldnames:
         raise ValueError("CSV has no header row.")
 
-    column_map = _resolve_columns(reader.fieldnames, aliases)
+    column_map = _resolve_columns(reader.fieldnames, aliases, pms_profile=pms_profile)
     for row_number, row in enumerate(reader, start=2):
         try:
             booking_date = _parse_date(row[column_map["booking_date"]], patterns=date_patterns)
@@ -170,7 +261,7 @@ def read_bookings_csv(
                 reservation_date = booking_date
             check_in_date = _parse_date(row[column_map["check_in_date"]], patterns=date_patterns)
             check_out_date = _parse_date(row[column_map["check_out_date"]], patterns=date_patterns)
-            raw_revenue = row[column_map["room_revenue"]].strip()
+            raw_revenue = _pick_room_revenue(row, column_map)
             room_revenue = Decimal("0") if not raw_revenue else _parse_decimal(raw_revenue)
             room_nights = _parse_int(row[column_map["room_nights"]])
             available_room_nights = None
@@ -188,14 +279,17 @@ def read_bookings_csv(
 
             property_id = row.get(column_map.get("property_id", ""), "").strip()
             property_name = row.get(column_map.get("property_name", ""), "").strip()
-            listing_name = row.get(column_map.get("listing_name", ""), "").strip()
+            listing_name = _pick_listing_name(
+                row,
+                pms_profile=pms_profile,
+                default_property_id=default_property_id,
+            )
             channel = row.get(column_map.get("channel", ""), "").strip()
             grouping = row.get(column_map.get("grouping", ""), "").strip()
-            status = (
-                row.get(column_map.get("status", ""), "").strip().lower()
-                if "status" in column_map
-                else "confirmed"
-            )
+            if "status" in column_map:
+                status = _pick_status(row, column_map).strip().lower()
+            else:
+                status = "confirmed"
 
             if not listing_name and "listing_name" not in column_map:
                 listing_name = row.get("Listing Name", "").strip()

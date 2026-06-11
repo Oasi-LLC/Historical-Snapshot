@@ -34,9 +34,6 @@ pip install -e .
 # Add your CSV (not in the repo — see data/README.md)
 mkdir -p data/lafave
 # copy your export to: data/lafave/lafave_main_data.csv
-
-# Smoke test (uses committed test fixtures only)
-PYTHONPATH=src pytest -q
 ```
 
 ### Run the dashboard (two terminals)
@@ -75,14 +72,14 @@ Historical-Snapshot/
   src/historical_snapshot/   # Core metrics, CSV ingest, CLI logic
   api/main.py                # FastAPI REST API
   dashboard/app.py           # Streamlit UI (calls API)
-  tests/fixtures/            # Small sample CSVs for pytest
+  config/                    # Property + PMS profiles
   data/                      # Your CSVs locally (gitignored)
   docker-compose.yml
 ```
 
 ## Install options
 
-**Recommended** (matches `requirements.txt` — API, dashboard, and tests):
+**Recommended** (matches `requirements.txt` — API and dashboard):
 
 ```bash
 pip install -r requirements.txt
@@ -92,14 +89,14 @@ pip install -e .
 **Optional extras** via `pyproject.toml`:
 
 ```bash
-pip install -e ".[all]"    # api + dashboard + dev (pytest, httpx)
+pip install -e ".[all]"    # api + dashboard
 pip install -e ".[api]"    # FastAPI only
 pip install -e ".[dashboard]"  # Streamlit only
 ```
 
 ## CLI
 
-Works without the API. Point `--csv` at your file or a test fixture:
+Works without the API. Point `--csv` at your property data file:
 
 ```bash
 source .venv/bin/activate
@@ -112,12 +109,6 @@ PYTHONPATH=src snapshot \
   --date-basis stay \
   --format text
 
-# Example with repo test fixture (no private data needed)
-PYTHONPATH=src snapshot \
-  --csv tests/fixtures/bookings_sample.csv \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31 \
-  --format json
 ```
 
 Common flags: `--date-basis` (`stay` | `arrival` | `reservation`), `--breakdown-by` (`listing` | `grouping`), `--inventory-listings`, `--bands`.
@@ -180,16 +171,7 @@ data/
 
 Add more properties as `data/<property_id>/*.csv`. Column mapping and defaults live in `config/properties/<folder>.json` and `config/pms/`. The API discovers folders via `GET /properties?data_root=data`.
 
-See `data/README.md` for details. Tests use only `tests/fixtures/`.
-
-## Tests
-
-```bash
-source .venv/bin/activate
-PYTHONPATH=src pytest -q
-```
-
-No `data/` CSV required — fixtures cover unit and API tests.
+See `data/README.md` for details.
 
 ## Canonical CSV columns
 

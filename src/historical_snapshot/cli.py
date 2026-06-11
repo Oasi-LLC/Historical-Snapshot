@@ -16,6 +16,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", required=True, help="Path to booking CSV export")
     parser.add_argument("--property-id", default="LAFAVE", help="Property ID label for output")
     parser.add_argument("--property-name", default="LaFave", help="Property name label for output")
+    parser.add_argument(
+        "--property-folder",
+        default=None,
+        help="Property config folder name (e.g. flohom, WMB); inferred from CSV parent dir if omitted",
+    )
     parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument(
@@ -50,6 +55,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format",
     )
+    parser.add_argument(
+        "--yoy-compare-start-date",
+        default=None,
+        help="YoY comparison period start (YYYY-MM-DD); for live_listings comparable units",
+    )
+    parser.add_argument(
+        "--yoy-compare-end-date",
+        default=None,
+        help="YoY comparison period end (YYYY-MM-DD)",
+    )
     return parser
 
 
@@ -65,6 +80,9 @@ def main() -> int:
         breakdown_by=args.breakdown_by,
         bands=args.bands,
         inventory_listings=args.inventory_listings,
+        property_folder=args.property_folder,
+        yoy_compare_start_date=args.yoy_compare_start_date,
+        yoy_compare_end_date=args.yoy_compare_end_date,
     )
 
     if args.format == "json":

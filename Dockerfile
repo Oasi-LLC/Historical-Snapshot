@@ -3,6 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY requirements.txt pyproject.toml README.md ./
+COPY config ./config
 COPY src ./src
 COPY api ./api
 COPY dashboard ./dashboard

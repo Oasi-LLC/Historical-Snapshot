@@ -19,6 +19,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# Abandoned / local-only
+frontend/
+
 # OS / editor
 .DS_Store
 .idea/

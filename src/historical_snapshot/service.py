@@ -15,8 +15,13 @@ from historical_snapshot.core.bands import DEFAULT_BANDS, Band, parse_bands
 from historical_snapshot.core.metrics import (
     DateBasis,
     SnapshotMetrics,
+    comparable_live_listings,
     compute_portfolio_snapshot_metrics,
     compute_snapshot_metrics,
+    count_active_listings,
+    count_live_listings_in_scope,
+    listing_available_nights_in_window,
+    total_available_room_nights,
 )
 from historical_snapshot.core.snapshot import snapshot_to_dict
 from historical_snapshot.io.property_reader import read_property_bookings
@@ -36,6 +41,7 @@ class SnapshotResult:
     validation_issues: list[ValidationIssue]
     inventory_mode: InventoryMode = "manual"
     inventory_units_used: int | None = None
+    comparable_listings_used: tuple[str, ...] | None = None
 
     @property
     def portfolio_snapshot(self) -> dict:
@@ -54,6 +60,7 @@ class SnapshotResult:
             "invalid_rows_skipped": self.invalid_rows_skipped,
             "inventory_mode": self.inventory_mode,
             "inventory_units_used": self.inventory_units_used,
+            "comparable_listings_used": list(self.comparable_listings_used or ()),
         }
 
 
@@ -90,20 +97,76 @@ def records_for_breakdown(records: list[BookingRecord], breakdown_by: str) -> li
     return remapped
 
 
-def grouping_inventory_counts(records: list[BookingRecord]) -> dict[str, int]:
+def grouping_inventory_counts(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    *,
+    inventory_mode: InventoryMode,
+) -> dict[str, int]:
     listings_by_group: dict[str, set[str]] = {}
     for record in records:
         group = record.grouping or "Ungrouped"
         listing = record.listing_name or record.property_id
         listings_by_group.setdefault(group, set()).add(listing)
 
+    if inventory_mode == "active_listings":
+        counts: dict[str, int] = {}
+        for group in listings_by_group:
+            group_records = [r for r in records if (r.grouping or "Ungrouped") == group]
+            counts[group] = count_active_listings(group_records, start_date, end_date)
+        return counts
+
     return {group: max(len(listings), 1) for group, listings in listings_by_group.items()}
 
 
-def resolve_inventory_units(*, manual_units: int | None) -> int:
+def resolve_inventory_units(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    *,
+    inventory_mode: InventoryMode,
+    manual_units: int | None,
+    listing_live_dates: dict[str, date] | None = None,
+    comparable_listings: frozenset[str] | None = None,
+) -> int:
+    if inventory_mode == "live_listings" and listing_live_dates:
+        return count_live_listings_in_scope(
+            listing_live_dates,
+            start_date,
+            end_date,
+            listings=comparable_listings,
+        )
+    if inventory_mode == "active_listings":
+        return count_active_listings(records, start_date, end_date)
     if manual_units is not None:
         return manual_units
     return 1
+
+
+def resolve_available_room_nights(
+    start_date: date,
+    end_date: date,
+    *,
+    inventory_mode: InventoryMode,
+    inventory_units: int | None,
+    listing_live_dates: dict[str, date] | None = None,
+    listing_name: str | None = None,
+    comparable_listings: frozenset[str] | None = None,
+) -> int | None:
+    if inventory_mode == "live_listings" and listing_live_dates:
+        if listing_name is not None:
+            if comparable_listings is not None and listing_name not in comparable_listings:
+                return 0
+            live_date = listing_live_dates.get(listing_name)
+            if live_date is None:
+                return 0
+            return listing_available_nights_in_window(live_date, start_date, end_date)
+        listings = comparable_listings if comparable_listings is not None else None
+        return total_available_room_nights(
+            listing_live_dates, start_date, end_date, listings=listings
+        )
+    return None
 
 
 def discover_properties(data_root: Path | str = DEFAULT_DATA_ROOT) -> list[dict]:
@@ -172,18 +235,27 @@ def run_snapshot(
     inventory_mode: InventoryMode | None = None,
     property_folder: str | None = None,
     as_of_date: str | date | None = None,
+    yoy_compare_start_date: str | date | None = None,
+    yoy_compare_end_date: str | date | None = None,
 ) -> SnapshotResult:
     start = parse_date(start_date)
     end = parse_date(end_date)
     if end < start:
         raise ValueError("end_date must be on or after start_date")
     as_of = parse_date(as_of_date) if as_of_date is not None else None
+    yoy_compare_start = (
+        parse_date(yoy_compare_start_date) if yoy_compare_start_date is not None else None
+    )
+    yoy_compare_end = (
+        parse_date(yoy_compare_end_date) if yoy_compare_end_date is not None else None
+    )
+    if (yoy_compare_start is None) ^ (yoy_compare_end is None):
+        raise ValueError("yoy_compare_start_date and yoy_compare_end_date must both be set")
 
     if property_folder:
         property_config = load_property_config(property_folder)
-        pms_profile = load_pms_profile(property_config.pms) if property_config else None
     else:
-        property_config, pms_profile = resolve_property_config(
+        property_config, _pms_profile = resolve_property_config(
             csv_path,
             property_id=property_id,
             property_name=property_name,
@@ -208,22 +280,64 @@ def run_snapshot(
         property_config=property_config,
     )
 
-    portfolio_inventory = resolve_inventory_units(manual_units=inventory_listings)
+    live_dates = property_config.listing_live_dates if property_config else {}
+    comparable_listings: frozenset[str] | None = None
+    if (
+        inventory_mode == "live_listings"
+        and live_dates
+        and yoy_compare_start is not None
+        and yoy_compare_end is not None
+    ):
+        comparable_listings = comparable_live_listings(
+            live_dates, start, end, yoy_compare_start, yoy_compare_end
+        )
+
+    portfolio_records = records
+    if comparable_listings is not None:
+        portfolio_records = [
+            record for record in records if record.listing_name in comparable_listings
+        ]
+
+    portfolio_inventory = resolve_inventory_units(
+        portfolio_records,
+        start,
+        end,
+        inventory_mode=inventory_mode,
+        manual_units=inventory_listings,
+        listing_live_dates=live_dates or None,
+        comparable_listings=comparable_listings,
+    )
+    portfolio_available_nights = resolve_available_room_nights(
+        start,
+        end,
+        inventory_mode=inventory_mode,
+        inventory_units=portfolio_inventory,
+        listing_live_dates=live_dates or None,
+        comparable_listings=comparable_listings,
+    )
 
     portfolio = compute_portfolio_snapshot_metrics(
-        records=records,
+        records=portfolio_records,
         property_name=property_name,
         start_date=start,
         end_date=end,
         bands=parsed_bands,
         date_basis=date_basis,
         inventory_units=portfolio_inventory,
+        available_room_nights=portfolio_available_nights,
         as_of_date=as_of,
     )
-    breakdown_records = records_for_breakdown(records, breakdown_by)
+    breakdown_source = portfolio_records if comparable_listings is not None else records
+    breakdown_records = records_for_breakdown(breakdown_source, breakdown_by)
     bucket_ids = sorted({r.property_id for r in breakdown_records})
+    if comparable_listings is not None and breakdown_by == "listing":
+        bucket_ids = sorted(name for name in bucket_ids if name in comparable_listings)
     inventory_by_group = (
-        grouping_inventory_counts(records) if breakdown_by == "grouping" else {}
+        grouping_inventory_counts(
+            records, start, end, inventory_mode=inventory_mode
+        )
+        if breakdown_by == "grouping"
+        else {}
     )
 
     def breakdown_inventory_units(bucket_id: str) -> int:
@@ -235,6 +349,17 @@ def run_snapshot(
             return property_config.grouping_inventory.get(bucket_id, 1)
         return inventory_by_group.get(bucket_id, 1)
 
+    def breakdown_available_nights(bucket_id: str) -> int | None:
+        return resolve_available_room_nights(
+            start,
+            end,
+            inventory_mode=inventory_mode,
+            inventory_units=breakdown_inventory_units(bucket_id),
+            listing_live_dates=live_dates or None,
+            listing_name=bucket_id if breakdown_by == "listing" else None,
+            comparable_listings=comparable_listings,
+        )
+
     breakdown_snapshots = [
         compute_snapshot_metrics(
             records=breakdown_records,
@@ -244,6 +369,7 @@ def run_snapshot(
             bands=parsed_bands,
             date_basis=date_basis,
             inventory_units=breakdown_inventory_units(bucket_id),
+            available_room_nights=breakdown_available_nights(bucket_id),
             as_of_date=as_of,
         )
         for bucket_id in bucket_ids
@@ -260,4 +386,7 @@ def run_snapshot(
         validation_issues=issues,
         inventory_mode=inventory_mode,
         inventory_units_used=portfolio_inventory,
+        comparable_listings_used=(
+            tuple(sorted(comparable_listings)) if comparable_listings is not None else None
+        ),
     )

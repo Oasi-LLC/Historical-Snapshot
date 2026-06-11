@@ -24,6 +24,8 @@ import streamlit as st
 
 import historical_snapshot.core.bands as _bands_mod
 from historical_snapshot.core.bands import parse_bands, sort_band_labels
+from historical_snapshot.config import parse_config_date
+from historical_snapshot.core.metrics import count_live_listings_in_scope
 
 DEFAULT_BANDS = getattr(
     _bands_mod,
@@ -112,6 +114,25 @@ def style_delta_columns(
     if delta_pct_col in idx_map:
         styles[idx_map[delta_pct_col]] = delta_style(row.get(delta_pct_raw_col))
     return styles
+
+
+def dashboard_inventory_count(
+    selected: dict,
+    *,
+    start_date: date,
+    end_date: date,
+) -> tuple[int, str | None]:
+    """Return portfolio listing count and optional help text for the sidebar."""
+    inventory_mode = selected.get("inventory_mode", "manual")
+    config = selected.get("config") or {}
+    if inventory_mode == "live_listings" and config.get("listing_live_dates"):
+        live_dates = {
+            name: parse_config_date(raw)
+            for name, raw in config["listing_live_dates"].items()
+        }
+        count = count_live_listings_in_scope(live_dates, start_date, end_date)
+        return count, "Units in scope for this date range based on Oasi go-live dates."
+    return int(selected.get("default_inventory_listings") or 30), None
 
 
 def shift_one_year(d: date) -> date:
@@ -772,13 +793,35 @@ with st.sidebar:
     with col_b:
         end_date = st.date_input("End", key="end_date")
 
-    default_inventory = selected.get("default_inventory_listings") or 30
-    inventory_listings = st.number_input(
-        "Portfolio listing count",
-        min_value=1,
-        value=int(default_inventory),
-        step=1,
+    inventory_count, inventory_help = dashboard_inventory_count(
+        selected,
+        start_date=start_date,
+        end_date=end_date,
     )
+    inventory_mode = selected.get("inventory_mode", "manual")
+    inventory_key = (
+        f"inventory_{selected['id']}_{start_date}_{end_date}"
+        if inventory_mode == "live_listings"
+        else f"inventory_{selected['id']}"
+    )
+    if inventory_mode == "live_listings":
+        inventory_listings = st.number_input(
+            "Portfolio listing count",
+            min_value=0,
+            value=int(inventory_count),
+            step=1,
+            disabled=True,
+            help=inventory_help,
+            key=inventory_key,
+        )
+    else:
+        inventory_listings = st.number_input(
+            "Portfolio listing count",
+            min_value=1,
+            value=int(inventory_count),
+            step=1,
+            key=inventory_key,
+        )
     bands = st.text_input("Booking window bands", value=DEFAULT_BANDS)
     st.divider()
     st.header("YoY table")
@@ -802,17 +845,22 @@ pace_as_of_stale = (
 )
 
 if run:
+    property_folder = selected.get("config", {}).get("folder") or selected["id"]
     base_params = {
         "csv_path": selected["csv_path"],
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "property_id": selected["id"],
         "property_name": selected["name"],
+        "property_folder": property_folder,
         "date_basis": "stay",
         "breakdown_by": "listing",
         "bands": bands,
         "inventory_listings": int(inventory_listings),
     }
+    if inventory_mode == "live_listings":
+        base_params["yoy_compare_start_date"] = compare_start_date.isoformat()
+        base_params["yoy_compare_end_date"] = compare_end_date.isoformat()
 
     try:
         payload = fetch_snapshot(st.session_state.api_url, base_params)
@@ -825,6 +873,9 @@ if run:
         "start_date": prior_start_date.isoformat(),
         "end_date": prior_end_date.isoformat(),
     }
+    if inventory_mode == "live_listings":
+        prior_params["yoy_compare_start_date"] = start_date.isoformat()
+        prior_params["yoy_compare_end_date"] = end_date.isoformat()
     try:
         prior_payload = fetch_snapshot(st.session_state.api_url, prior_params)
     except requests.RequestException as exc:
@@ -920,10 +971,18 @@ pace_compare_dr = pace_compare_portfolio["date_range"]
 current_year_label = period_year_label(start_date, end_date)
 compare_year_label = period_year_label(compare_start_date, compare_end_date)
 st.subheader(f"YoY comparison — {current_year_label} vs {compare_year_label}")
+comparable_listings = payload.get("comparable_listings_used") or []
+comparable_note = ""
+if comparable_listings:
+    comparable_note = (
+        f" Comparable units only ({len(comparable_listings)}): "
+        f"{', '.join(comparable_listings)}."
+    )
 st.caption(
     f"Pace as of **{pace_as_of_current.isoformat()}** ({dr['start']} to {dr['end']}) vs "
     f"**{pace_as_of_prior.isoformat()}** ({pace_compare_dr['start']} to {pace_compare_dr['end']}). "
     f"**{compare_year_label} total** is the final realized outcome for the same stay period last year."
+    f"{comparable_note}"
 )
 render_yoy_pace_summary(
     pace_current=pace_current_portfolio,

@@ -1,0 +1,109 @@
+{
+  "normalized_cache_columns": [
+    "booking_date",
+    "reservation_date",
+    "check_in_date",
+    "check_out_date",
+    "room_revenue",
+    "room_nights",
+    "listing_name",
+    "channel",
+    "status",
+    "grouping",
+    "payment_status"
+  ],
+  "properties": {
+    "lafave": {
+      "primary_tab": "Lafave_data",
+      "helper_tabs": ["Lafave_data2", "Lafave_OTA_data"],
+      "source_columns": {
+        "Lafave_data": [
+          "Res#",
+          "Date & Time",
+          "Arrival",
+          "Departure",
+          "Amount",
+          "# Nights",
+          "By Phone",
+          "Booked Online",
+          "3rd Party"
+        ],
+        "Lafave_data2": ["Res#", "Unit"],
+        "Lafave_OTA_data": ["Reservation", "Channel Name"]
+      },
+      "derived_columns": [
+        "reservation_date",
+        "channel",
+        "listing_name",
+        "grouping"
+      ],
+      "notes": "Base feed comes from Lafave_data. Listing name is looked up from Lafave_data2, OTA channel is looked up from Lafave_OTA_data, and grouping follows the existing spreadsheet formula."
+    },
+    "onera": {
+      "primary_tab": "FBG_data",
+      "legacy_sources": [
+        {"file": "historical_data.csv", "pms": "onera", "location": "data/Onera/"}
+      ],
+      "source_columns": [
+        "Reservation Date",
+        "Check in Date",
+        "Check out Date",
+        "Accommodation Total",
+        "Grand Total",
+        "Nights",
+        "Room Type",
+        "Source",
+        "Status"
+      ],
+      "notes": "Hybrid feed: fixed local historical_data.csv plus live FBG_data from Google Sheets replacing current_data.csv. room_revenue = Accommodation Total + resort fee ($35 * Nights), except resort fee is $0 when Source is Airbnb."
+    },
+    "wmb": {
+      "primary_tab": "WMB_data",
+      "source_columns": [
+        "Reservation Date",
+        "Check in Date",
+        "Check out Date",
+        "Accommodation Total",
+        "Grand Total",
+        "Nights",
+        "Room Type",
+        "Source",
+        "Status"
+      ],
+      "notes": "WMB_data is the active Wimberley source. room_revenue = Accommodation Total + resort fee ($35 * Nights). Room Type values are aliased into the existing listing/grouping config."
+    },
+    "flohom": {
+      "primary_tab": "Flohom_data",
+      "source_columns": [
+        "Reservation date",
+        "Check-in date",
+        "Check-out date",
+        "Listing",
+        "Channel",
+        "Reservation status",
+        "Payment status",
+        "rentalRevenue",
+        "Nights"
+      ],
+      "notes": "Hostaway-style tab. Channel mapping: airbnbOfficial -> Airbnb, vrbo -> VRBO, direct/bookingengine/google -> Direct, else Other. Listing names are normalized from zero-padded values like FLOHOM 04."
+    },
+    "atx": {
+      "primary_tab": "ATX_hostaway_data",
+      "legacy_sources": [
+        {"file": "track_data.csv", "pms": "track", "location": "data/ATX/"}
+      ],
+      "source_columns": [
+        "Reservation date",
+        "Check-in date",
+        "Check-out date",
+        "Listing",
+        "Channel",
+        "Reservation status",
+        "Payment status",
+        "rentalRevenue",
+        "Nights"
+      ],
+      "notes": "Hybrid feed: fixed local track_data.csv plus live ATX_hostaway_data from Google Sheets replacing hostaway_data.csv. Channel mapping: airbnbOfficial -> Airbnb."
+    }
+  }
+}

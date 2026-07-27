@@ -5,15 +5,18 @@
   "property_name": "ATX",
   "inventory_mode": "manual",
   "default_inventory_listings": 2,
+  "data_source": {
+    "type": "google_sheets",
+    "tab": "ATX_hostaway_data",
+    "legacy_sources": [
+      {"file": "track_data.csv", "pms": "track"}
+    ]
+  },
   "listing_inventory": {
     "Sunstrip": 1,
     "Malvern (4BR)": 1,
     "Malvern (3BR)": 1
   },
-  "data_sources": [
-    {"file": "track_data.csv", "pms": "track"},
-    {"file": "hostaway_data.csv", "pms": "hostaway"}
-  ],
   "listing_aliases": {
     "Malvern": "Malvern (4BR)",
     "MLVRN (3BR in Loft + Airstream)": "Malvern (3BR)"

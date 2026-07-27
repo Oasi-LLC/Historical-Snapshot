@@ -59,6 +59,15 @@ def fetch_snapshot(api_url: str, params: dict) -> dict:
     return response.json()
 
 
+def sync_google_sheets(api_url: str, data_root: str, property_folder: str | None = None) -> dict:
+    params: dict[str, str] = {"data_root": data_root}
+    if property_folder:
+        params["property_folder"] = property_folder
+    response = requests.post(f"{api_url}/sync", params=params, timeout=120)
+    response.raise_for_status()
+    return response.json()
+
+
 def _is_missing(value: object) -> bool:
     if value is None:
         return True
@@ -130,7 +139,15 @@ def dashboard_inventory_count(
             name: parse_config_date(raw)
             for name, raw in config["listing_live_dates"].items()
         }
-        count = count_live_listings_in_scope(live_dates, start_date, end_date)
+        listing_inventory = {
+            name: int(units) for name, units in config.get("listing_inventory", {}).items()
+        }
+        count = count_live_listings_in_scope(
+            live_dates,
+            start_date,
+            end_date,
+            listing_inventory=listing_inventory or None,
+        )
         return count, "Units in scope for this date range based on Oasi go-live dates."
     return int(selected.get("default_inventory_listings") or 30), None
 
@@ -147,6 +164,17 @@ def period_year_label(start: date, end: date) -> str:
     if start.year == end.year:
         return str(start.year)
     return f"{start.year}–{end.year}"
+
+
+def format_date_with_day(value: date) -> str:
+    """Human-readable date with weekday, e.g. Jul 4, 2026 (Saturday)."""
+    return f"{value.strftime('%b')} {value.day}, {value.year} ({value.strftime('%A')})"
+
+
+def format_stay_period(start: date, end: date) -> str:
+    if start == end:
+        return format_date_with_day(start)
+    return f"{format_date_with_day(start)} → {format_date_with_day(end)}"
 
 
 def pace_as_of_dates() -> tuple[date, date]:
@@ -267,14 +295,14 @@ def build_yoy_table(
 
 def late_pickup_share_pct(portfolio: dict, bands: str, *, late_min_days: int = 31) -> float | None:
     pickup = portfolio.get("pickup") or {}
-    nights_by_band = pickup.get("room_nights_by_band") or {}
+    bookings_by_band = pickup.get("bookings_by_band") or {}
     parsed = parse_bands(bands)
     late_labels = {band.label for band in parsed if band.min_days >= late_min_days}
-    total_nights = sum(nights_by_band.values())
-    if total_nights <= 0:
+    total_bookings = sum(bookings_by_band.values())
+    if total_bookings <= 0:
         return None
-    late_nights = sum(nights_by_band.get(label, 0) for label in late_labels)
-    return 100 * late_nights / total_nights
+    late_bookings = sum(bookings_by_band.get(label, 0) for label in late_labels)
+    return 100 * late_bookings / total_bookings
 
 
 def build_yoy_insight_text(
@@ -328,12 +356,12 @@ def build_yoy_insight_text(
         band_days_text = f"{late_band_text} days before arrival"
         if late_share >= 25:
             sentences.append(
-                f"Last year, {round(late_share)}% of room nights were booked "
+                f"Last year, {round(late_share)}% of bookings were made "
                 f"{band_days_text} — demand tended to book early (far ahead of stay)."
             )
         elif late_share < 15:
             sentences.append(
-                f"Last year, only {round(late_share)}% of room nights were booked "
+                f"Last year, only {round(late_share)}% of bookings were made "
                 f"{band_days_text} — most demand booked closer to arrival (relatively late)."
             )
 
@@ -466,10 +494,10 @@ def format_pickup_for_display(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Band": df["band"],
-            "Room nights": df["room_nights"],
+            "Bookings": df["bookings"],
             "Revenue": df["revenue"].apply(fmt_money),
             "Revenue share": df["revenue_share_pct"].apply(fmt_pct),
-            "Nights share": df["nights_share_pct"].apply(fmt_pct),
+            "Bookings share": df["bookings_share_pct"].apply(fmt_pct),
         }
     )
 
@@ -780,6 +808,30 @@ with st.sidebar:
     selected_label = st.selectbox("Property", property_options, index=default_property_index)
     selected = property_labels[selected_label]
 
+    data_source = selected.get("data_source", "csv")
+    if data_source == "google_sheets":
+        last_synced = selected.get("last_synced_at")
+        if last_synced:
+            st.caption(f"Last synced: {last_synced}")
+        else:
+            st.caption("Not synced yet — refresh from Google Sheets before running.")
+        property_folder = selected.get("config", {}).get("folder") or selected.get("folder")
+        if st.button("Refresh from Google Sheets", use_container_width=True):
+            try:
+                sync_result = sync_google_sheets(
+                    st.session_state.api_url,
+                    st.session_state.data_root,
+                    property_folder=property_folder,
+                )
+                fetch_properties.clear()
+                if sync_result.get("errors"):
+                    st.error(sync_result["errors"][0]["error"])
+                else:
+                    st.success("Google Sheets sync complete.")
+                    st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Sync failed: {exc}")
+
     st.divider()
     st.header("Date range")
     if "start_date" not in st.session_state:
@@ -792,6 +844,8 @@ with st.sidebar:
         start_date = st.date_input("Start", key="start_date")
     with col_b:
         end_date = st.date_input("End", key="end_date")
+
+    st.caption(format_stay_period(start_date, end_date))
 
     inventory_count, inventory_help = dashboard_inventory_count(
         selected,
@@ -836,6 +890,7 @@ with st.sidebar:
             compare_start_date = st.date_input("Compare start", value=prior_start_date)
         with c2:
             compare_end_date = st.date_input("Compare end", value=prior_end_date)
+        st.caption(f"Compare stay: {format_stay_period(compare_start_date, compare_end_date)}")
     run = st.button("Run snapshot", type="primary", use_container_width=True)
 
 pace_as_of_current, pace_as_of_prior = pace_as_of_dates()
@@ -845,19 +900,21 @@ pace_as_of_stale = (
 )
 
 if run:
-    property_folder = selected.get("config", {}).get("folder") or selected["id"]
+    property_folder = selected.get("config", {}).get("folder") or selected.get("folder") or selected["id"]
     base_params = {
-        "csv_path": selected["csv_path"],
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "property_id": selected["id"],
         "property_name": selected["name"],
         "property_folder": property_folder,
+        "data_root": st.session_state.data_root,
         "date_basis": "stay",
         "breakdown_by": "listing",
         "bands": bands,
         "inventory_listings": int(inventory_listings),
     }
+    if selected.get("csv_path"):
+        base_params["csv_path"] = selected["csv_path"]
     if inventory_mode == "live_listings":
         base_params["yoy_compare_start_date"] = compare_start_date.isoformat()
         base_params["yoy_compare_end_date"] = compare_end_date.isoformat()
@@ -971,6 +1028,10 @@ pace_compare_dr = pace_compare_portfolio["date_range"]
 current_year_label = period_year_label(start_date, end_date)
 compare_year_label = period_year_label(compare_start_date, compare_end_date)
 st.subheader(f"YoY comparison — {current_year_label} vs {compare_year_label}")
+st.caption(
+    f"**Selected stay:** {format_stay_period(start_date, end_date)} · "
+    f"**Compare stay:** {format_stay_period(compare_start_date, compare_end_date)}"
+)
 comparable_listings = payload.get("comparable_listings_used") or []
 comparable_note = ""
 if comparable_listings:
@@ -1040,20 +1101,20 @@ bw_col2.metric("Median booking window (days)", fmt_number(bw.get("median_days"),
 
 st.markdown("**Pickup by booking window**")
 pickup = bw_portfolio["pickup"]
-band_order = sort_band_labels(list(pickup["room_nights_by_band"].keys()), parse_bands(bands))
+band_order = sort_band_labels(list(pickup["bookings_by_band"].keys()), parse_bands(bands))
 pickup_df = pd.DataFrame(
     {
         "band": band_order,
-        "room_nights": [pickup["room_nights_by_band"].get(b, 0) for b in band_order],
+        "bookings": [pickup["bookings_by_band"].get(b, 0) for b in band_order],
         "revenue": [round(pickup["revenue_by_band"].get(b, 0) or 0) for b in band_order],
         "revenue_share_pct": [pickup.get("revenue_share_pct_by_band", {}).get(b) for b in band_order],
-        "nights_share_pct": [pickup.get("room_nights_share_pct_by_band", {}).get(b) for b in band_order],
+        "bookings_share_pct": [pickup.get("bookings_share_pct_by_band", {}).get(b) for b in band_order],
     }
 )
 
 chart_col, table_col = st.columns([2, 1])
 with chart_col:
-    st.bar_chart(pickup_df.set_index("band")["room_nights"])
+    st.bar_chart(pickup_df.set_index("band")["bookings"])
 with table_col:
     st.dataframe(format_pickup_for_display(pickup_df), use_container_width=True, hide_index=True)
 

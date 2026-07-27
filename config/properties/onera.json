@@ -1,0 +1,102 @@
+{
+  "folder": "Onera",
+  "pms": "onera",
+  "property_id": "ONERA",
+  "property_name": "Onera Fredericksburg",
+  "inventory_mode": "live_listings",
+  "default_inventory_listings": 38,
+  "data_source": {
+    "type": "google_sheets",
+    "tab": "FBG_data",
+    "legacy_sources": [
+      {"file": "historical_data.csv", "pms": "onera"}
+    ]
+  },
+  "source_cutoffs": [
+    {
+      "file": "historical_data.csv",
+      "property_name": "Onera Fredericksburg",
+      "max_reservation_date": "2024-12-31",
+      "max_check_in_date": "2024-12-31"
+    }
+  ],
+  "listing_inventory": {
+    "Walnut House": 1,
+    "Spyglass": 1,
+    "Sage Safari": 1,
+    "Monarch": 1,
+    "Live Oak Lodge": 1,
+    "Lantana Dome": 1,
+    "Cocoon": 1,
+    "Buckeye Bungalow": 1,
+    "Pecan Haus": 1,
+    "Juniper Haus": 1,
+    "Cedar Haus": 1,
+    "Bluebonnet": 1,
+    "Post Oak": 1,
+    "Winecup": 2,
+    "Great Lodge: King Room": 6,
+    "Great Lodge: King Room (Accessible)": 2,
+    "Great Lodge": 1,
+    "Quonset": 2,
+    "Monolith": 2,
+    "Diamond": 3,
+    "Cypress Lodge | Sleeps 4": 2,
+    "Cypress Lodge | Sleeps 2": 2,
+    "Cypress Lodge | Sleeps 6": 2,
+    "Spiral": 1
+  },
+  "listing_live_dates": {
+    "Walnut House": "2020-01-01",
+    "Spyglass": "2020-01-01",
+    "Sage Safari": "2020-01-01",
+    "Monarch": "2020-01-01",
+    "Live Oak Lodge": "2020-01-01",
+    "Lantana Dome": "2020-01-01",
+    "Cocoon": "2020-01-01",
+    "Buckeye Bungalow": "2020-01-01",
+    "Pecan Haus": "2020-01-01",
+    "Juniper Haus": "2020-01-01",
+    "Cedar Haus": "2020-01-01",
+    "Bluebonnet": "2020-01-01",
+    "Post Oak": "2025-07-01",
+    "Winecup": "2025-07-01",
+    "Great Lodge: King Room": "2025-07-01",
+    "Great Lodge: King Room (Accessible)": "2025-07-01",
+    "Great Lodge": "2025-07-01",
+    "Quonset": "2025-07-01",
+    "Monolith": "2025-07-01",
+    "Diamond": "2025-07-01",
+    "Cypress Lodge | Sleeps 4": "2025-07-01",
+    "Cypress Lodge | Sleeps 2": "2025-07-01",
+    "Cypress Lodge | Sleeps 6": "2025-07-01",
+    "Spiral": "2025-07-01"
+  },
+  "listing_aliases": {
+    "Diamond (Pet-friendly)": "Diamond",
+    "Winecup (Pet-friendly)": "Winecup",
+    "Cypress Lodge Sleeps 2": "Cypress Lodge | Sleeps 2",
+    "Cypress Lodge Sleeps 4": "Cypress Lodge | Sleeps 4",
+    "Cypress Lodge Sleeps 6": "Cypress Lodge | Sleeps 6",
+    "Cypress Lodge | Pet-Friendly • Sleeps 2": "Cypress Lodge | Sleeps 2",
+    "Cypress Lodge | Pet-Friendly • Sleeps 4": "Cypress Lodge | Sleeps 4",
+    "Cypress Lodge | Pet-Friendly • Sleeps 6": "Cypress Lodge | Sleeps 6"
+  },
+  "listing_combo_splits": {
+    "Great Lodge": [
+      "Great Lodge: King Room",
+      "Great Lodge: King Room (Accessible)"
+    ],
+    "Cypress Lodge | Sleeps 6": [
+      "Cypress Lodge | Sleeps 2",
+      "Cypress Lodge | Sleeps 4"
+    ]
+  },
+  "exclude_zero_revenue": true,
+  "excluded_statuses": ["cancelled", "confirmation pending"],
+  "split_multi_listings": true,
+  "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"],
+  "defaults": {
+    "breakdown_by": "listing"
+  }
+}

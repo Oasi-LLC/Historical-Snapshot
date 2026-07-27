@@ -32,6 +32,6 @@ frontend/
 # Streamlit local secrets
 .streamlit/secrets.toml
 
-# Portfolio CSVs stay local (use tests/fixtures for CI)
+# Portfolio CSVs and Sheets cache stay local (use tests/fixtures for CI)
 data/*
 !data/README.md

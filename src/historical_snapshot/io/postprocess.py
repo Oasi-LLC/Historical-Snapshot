@@ -76,6 +76,13 @@ def _canonical_listing(listing_name: str, listing_aliases: dict[str, str]) -> st
     return listing_aliases.get(listing_name, listing_name)
 
 
+def _expand_combo_listing(listing_name: str, combo_splits: dict[str, list[str]]) -> str:
+    components = combo_splits.get(listing_name)
+    if not components:
+        return listing_name
+    return ", ".join(components)
+
+
 def _dedupe_stay_records(records: list[BookingRecord]) -> list[BookingRecord]:
     best: dict[tuple[str, object, object], BookingRecord] = {}
     for record in records:
@@ -121,7 +128,11 @@ def apply_property_postprocess(
         split: list[BookingRecord] = []
         for record in filtered:
             channel = _normalized_channel(record.channel)
-            listings = _parse_base_listings(record.listing_name, base_listings)
+            listing_label = _expand_combo_listing(
+                record.listing_name,
+                property_config.listing_combo_splits,
+            )
+            listings = _parse_base_listings(listing_label, base_listings)
             if len(listings) <= 1:
                 listing_name = listings[0] if listings else record.listing_name
                 split.append(_clone_record(record, listing_name=listing_name, channel=channel))

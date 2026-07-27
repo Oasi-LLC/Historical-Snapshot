@@ -5,6 +5,10 @@
   "property_name": "LaFave",
   "inventory_mode": "manual",
   "default_inventory_listings": 30,
+  "data_source": {
+    "type": "google_sheets",
+    "tab": "Lafave_data"
+  },
   "defaults": {
     "breakdown_by": "listing"
   }

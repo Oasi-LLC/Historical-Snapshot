@@ -32,8 +32,10 @@ class SnapshotMetrics:
     occupancy_pct: Decimal | None
     revpar: Decimal | None
     average_los: Decimal | None
+    pickup_bookings_by_band: dict[str, int]
     pickup_room_nights_by_band: dict[str, int]
     pickup_revenue_by_band: dict[str, Decimal]
+    pickup_bookings_share_by_band: dict[str, Decimal]
     pickup_room_nights_share_by_band: dict[str, Decimal]
     pickup_revenue_share_by_band: dict[str, Decimal]
     booking_window_mean_days: Decimal | None
@@ -132,19 +134,26 @@ def count_live_listings_in_scope(
     end_date: date,
     *,
     listings: Iterable[str] | None = None,
+    listing_inventory: dict[str, int] | None = None,
 ) -> int:
     """Units with at least one available night in the snapshot window."""
     if listings is not None:
-        return sum(
-            1
-            for name in listings
-            if name in listing_live_dates
-            and listing_available_nights_in_window(
+        names = listings
+    else:
+        names = live_listings_in_scope(listing_live_dates, start_date, end_date)
+    total = 0
+    for name in names:
+        if name not in listing_live_dates:
+            continue
+        if (
+            listing_available_nights_in_window(
                 listing_live_dates[name], start_date, end_date
             )
-            > 0
-        )
-    return len(live_listings_in_scope(listing_live_dates, start_date, end_date))
+            <= 0
+        ):
+            continue
+        total += (listing_inventory or {}).get(name, 1)
+    return total
 
 
 def total_available_room_nights(
@@ -153,10 +162,12 @@ def total_available_room_nights(
     end_date: date,
     *,
     listings: Iterable[str] | None = None,
+    listing_inventory: dict[str, int] | None = None,
 ) -> int:
     keys = listings if listings is not None else listing_live_dates.keys()
     return sum(
         listing_available_nights_in_window(listing_live_dates[listing], start_date, end_date)
+        * (listing_inventory or {}).get(listing, 1)
         for listing in keys
         if listing in listing_live_dates
     )
@@ -282,6 +293,7 @@ def compute_snapshot_metrics(
     )
     los = _safe_div(Decimal(room_nights_sold), Decimal(len(filtered)))
 
+    pickup_bookings: dict[str, int] = defaultdict(int)
     pickup_nights: dict[str, int] = defaultdict(int)
     pickup_revenue: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     channel_nights: dict[str, int] = defaultdict(int)
@@ -300,6 +312,7 @@ def compute_snapshot_metrics(
         else:
             nights = record.room_nights
             revenue = record.room_revenue
+        pickup_bookings[label] += 1
         pickup_nights[label] += nights
         pickup_revenue[label] += revenue
 
@@ -311,10 +324,19 @@ def compute_snapshot_metrics(
         arrival_dow[_dow_label(record.check_in_date)] += 1
 
     # Shares for pickup bands
+    total_bookings_dec = Decimal(len(filtered))
     total_nights_dec = Decimal(room_nights_sold)
     total_rev_dec = room_revenue
+    pickup_bookings_share: dict[str, Decimal] = {}
     pickup_nights_share: dict[str, Decimal] = {}
     pickup_rev_share: dict[str, Decimal] = {}
+    for band, bookings in pickup_bookings.items():
+        pickup_bookings_share[band] = (
+            _quantize_2(
+                _safe_div(Decimal(bookings) * Decimal(100), total_bookings_dec) or Decimal(0)
+            )
+            or Decimal("0.00")
+        )
     for band, nights in pickup_nights.items():
         pickup_nights_share[band] = _quantize_2(_safe_div(Decimal(nights) * Decimal(100), total_nights_dec) or Decimal(0)) or Decimal("0.00")
         pickup_rev_share[band] = _quantize_2(_safe_div(pickup_revenue[band] * Decimal(100), total_rev_dec) or Decimal(0)) or Decimal("0.00")
@@ -344,8 +366,10 @@ def compute_snapshot_metrics(
         occupancy_pct=_quantize_2(occupancy * Decimal(100)) if occupancy is not None else None,
         revpar=_quantize_2(revpar),
         average_los=_quantize_2(los),
+        pickup_bookings_by_band=dict(pickup_bookings),
         pickup_room_nights_by_band=dict(pickup_nights),
         pickup_revenue_by_band={k: _quantize_2(v) or Decimal("0.00") for k, v in pickup_revenue.items()},
+        pickup_bookings_share_by_band=pickup_bookings_share,
         pickup_room_nights_share_by_band=pickup_nights_share,
         pickup_revenue_share_by_band=pickup_rev_share,
         booking_window_mean_days=_quantize_2(_mean(booking_window_days)),

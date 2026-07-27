@@ -28,10 +28,15 @@ def snapshot_to_dict(snapshot: SnapshotMetrics) -> dict:
         "revpar": _decimal_to_float(snapshot.revpar),
         "average_los": _decimal_to_float(snapshot.average_los),
         "pickup": {
+            "bookings_by_band": snapshot.pickup_bookings_by_band,
             "room_nights_by_band": snapshot.pickup_room_nights_by_band,
             "revenue_by_band": {
                 band: _decimal_to_float(value)
                 for band, value in snapshot.pickup_revenue_by_band.items()
+            },
+            "bookings_share_pct_by_band": {
+                band: _decimal_to_float(value)
+                for band, value in snapshot.pickup_bookings_share_by_band.items()
             },
             "room_nights_share_pct_by_band": {
                 band: _decimal_to_float(value)
@@ -78,9 +83,9 @@ def snapshot_to_text(snapshot: SnapshotMetrics, invalid_row_count: int) -> str:
         f"Average LOS: {maybe(snapshot.average_los)}",
         "Pickup by booking window band:",
     ]
-    for label, nights in snapshot.pickup_room_nights_by_band.items():
+    for label, bookings in snapshot.pickup_bookings_by_band.items():
         revenue = snapshot.pickup_revenue_by_band.get(label, Decimal("0.00"))
-        lines.append(f"  - {label}: nights={nights}, revenue={revenue}")
+        lines.append(f"  - {label}: bookings={bookings}, revenue={revenue}")
 
     if invalid_row_count:
         lines.append(f"Invalid rows skipped: {invalid_row_count}")

@@ -5,6 +5,10 @@
   "property_name": "Onera Wimberley",
   "inventory_mode": "manual",
   "default_inventory_listings": 28,
+  "data_source": {
+    "type": "google_sheets",
+    "tab": "WMB_data"
+  },
   "listing_inventory": {
     "Greenhouse": 9,
     "Greenhouse (Accessible)": 1,
@@ -20,6 +24,12 @@
     "Spyglass": "Spyglass",
     "Spyglass (Accessible)": "Spyglass",
     "Spyglass (Pet Friendly)": "Spyglass"
+  },
+  "listing_aliases": {
+    "Greenhouse Pet": "Greenhouse (Pet Friendly)",
+    "Spyglass Pet": "Spyglass (Pet Friendly)",
+    "Greenhouse Accessible": "Greenhouse (Accessible)",
+    "Spyglass Accessible": "Spyglass (Accessible)"
   },
   "grouping_inventory": {
     "Greenhouse": 16,

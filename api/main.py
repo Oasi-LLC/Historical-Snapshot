@@ -7,12 +7,18 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from historical_snapshot.core.bands import DEFAULT_BANDS
-from historical_snapshot.service import DEFAULT_DATA_ROOT, discover_properties, list_listings, run_snapshot
+from historical_snapshot.service import (
+    DEFAULT_DATA_ROOT,
+    discover_properties,
+    list_listings,
+    run_snapshot,
+    sync_properties,
+)
 
 app = FastAPI(
     title="Historical Snapshot API",
     description="Property performance snapshots for revenue management.",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -35,21 +41,62 @@ def get_properties(data_root: str = Query(default=str(DEFAULT_DATA_ROOT))) -> di
     return {"data_root": data_root, "properties": properties}
 
 
+@app.post("/sync")
+@app.get("/sync")
+def sync_sheets(
+    data_root: str = Query(default=str(DEFAULT_DATA_ROOT)),
+    property_folder: Optional[str] = Query(
+        default=None,
+        description="Sync one property by config folder name (e.g. onera, lafave)",
+    ),
+) -> dict:
+    try:
+        return sync_properties(data_root=data_root, property_folder=property_folder)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @app.get("/listings")
 def get_listings(
-    csv_path: str = Query(..., description="Path to property CSV file"),
+    csv_path: Optional[str] = Query(default=None, description="Path to property CSV file"),
+    property_folder: Optional[str] = Query(
+        default=None,
+        description="Property config folder name (e.g. flohom, WMB)",
+    ),
+    property_id: Optional[str] = Query(default=None, description="Property ID label"),
+    data_root: str = Query(default=str(DEFAULT_DATA_ROOT)),
 ) -> dict:
-    path = Path(csv_path)
-    if not path.is_file():
+    if csv_path is None and property_folder is None and property_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="csv_path or property_folder/property_id is required",
+        )
+    if csv_path is not None and not Path(csv_path).is_file():
         raise HTTPException(status_code=404, detail=f"CSV not found: {csv_path}")
-    return {"csv_path": csv_path, "listings": list_listings(path)}
+    try:
+        listings = list_listings(
+            csv_path=csv_path,
+            property_folder=property_folder,
+            property_id=property_id,
+            data_root=data_root,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "csv_path": csv_path,
+        "property_folder": property_folder,
+        "property_id": property_id,
+        "listings": listings,
+    }
 
 
 @app.get("/snapshot")
 def get_snapshot(
-    csv_path: str = Query(..., description="Path to property CSV file"),
     start_date: str = Query(..., description="Start date YYYY-MM-DD"),
     end_date: str = Query(..., description="End date YYYY-MM-DD"),
+    csv_path: Optional[str] = Query(default=None, description="Path to property CSV file"),
     property_id: str = Query(default="LAFAVE"),
     property_name: str = Query(default="LaFave"),
     date_basis: str = Query(default="stay", pattern="^(stay|arrival|reservation)$"),
@@ -72,15 +119,15 @@ def get_snapshot(
         default=None,
         description="Property config folder name (e.g. flohom, WMB)",
     ),
+    data_root: str = Query(default=str(DEFAULT_DATA_ROOT)),
 ) -> dict:
-    path = Path(csv_path)
-    if not path.is_file():
+    if csv_path is not None and not Path(csv_path).is_file():
         raise HTTPException(status_code=404, detail=f"CSV not found: {csv_path}")
     try:
         result = run_snapshot(
-            csv_path=path,
             start_date=start_date,
             end_date=end_date,
+            csv_path=csv_path,
             property_id=property_id,
             property_name=property_name,
             date_basis=date_basis,  # type: ignore[arg-type]
@@ -89,6 +136,7 @@ def get_snapshot(
             inventory_listings=inventory_listings,
             as_of_date=as_of_date,
             property_folder=property_folder,
+            data_root=data_root,
             yoy_compare_start_date=yoy_compare_start_date,
             yoy_compare_end_date=yoy_compare_end_date,
         )

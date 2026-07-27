@@ -16,7 +16,7 @@ CLI and web dashboard for historical property performance (revenue management sn
 
 - **Python 3.10+** (3.11 recommended)
 - **git**
-- Property booking export as CSV (see [Data](#data-not-in-git))
+- Google Sheets access (service account + shared spreadsheet — see [Google Sheets data source](#google-sheets-data-source))
 - Optional: **Docker** for containerized runs
 
 ## Quick start (after clone)
@@ -31,9 +31,15 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 pip install -e .
 
-# Add your CSV (not in the repo — see data/README.md)
-mkdir -p data/lafave
-# copy your export to: data/lafave/lafave_main_data.csv
+# Google Sheets (see .env.example)
+export GOOGLE_SHEETS_SPREADSHEET_ID="your-spreadsheet-id"
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/historical-snapshot/sheets-sa.json"
+
+# One-time: place fixed legacy CSVs for hybrid properties (see data/README.md)
+#   data/Onera/historical_data.csv
+#   data/ATX/track_data.csv
+
+snapshot sync
 ```
 
 ### Run the dashboard (two terminals)
@@ -73,7 +79,7 @@ Historical-Snapshot/
   api/main.py                # FastAPI REST API
   dashboard/app.py           # Streamlit UI (calls API)
   config/                    # Property + PMS profiles
-  data/                      # Your CSVs locally (gitignored)
+  data/                      # Sheets cache + fixed legacy CSVs (gitignored)
   docker-compose.yml
 ```
 
@@ -96,22 +102,53 @@ pip install -e ".[dashboard]"  # Streamlit only
 
 ## CLI
 
-Works without the API. Point `--csv` at your property data file:
+Works without the API. Use `--property-folder` after `snapshot sync` (reads from the Sheets cache):
 
 ```bash
 source .venv/bin/activate
 
-# Example with local Lafave data
 PYTHONPATH=src snapshot \
-  --csv data/lafave/lafave_main_data.csv \
+  --property-folder lafave \
   --start-date 2025-07-04 \
   --end-date 2025-07-05 \
   --date-basis stay \
   --format text
-
 ```
 
 Common flags: `--date-basis` (`stay` | `arrival` | `reservation`), `--breakdown-by` (`listing` | `grouping`), `--inventory-listings`, `--bands`.
+
+## Google Sheets data source
+
+Properties can pull booking data from a master Google Spreadsheet (one tab per property) instead of manual CSV paste.
+
+### One-time setup
+
+1. Create a Google Cloud project and enable the **Google Sheets API**
+2. Create a **service account**, download the JSON key, and store it outside the repo
+3. Share the spreadsheet with the service account email
+4. Set environment variables (see `.env.example`):
+
+```bash
+export GOOGLE_SHEETS_SPREADSHEET_ID="your-spreadsheet-id"
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/historical-snapshot/sheets-sa.json"
+```
+
+### Sync and run
+
+```bash
+# Pull all configured property tabs into data/.cache/sheets/
+snapshot sync
+
+# Or sync one property
+snapshot sync --property-folder lafave
+
+# Run snapshot from synced cache (no --csv needed)
+snapshot --property-folder lafave --start-date 2025-07-04 --end-date 2025-07-05
+```
+
+In the dashboard, use **Refresh from Google Sheets** in the sidebar after selecting a property.
+
+Per-tab column schemas are documented in `config/sheets/schemas.json`. Property configs declare the sheet tab via `data_source` in `config/properties/<folder>.json`.
 
 ## API
 
@@ -122,16 +159,18 @@ PYTHONPATH=src uvicorn api.main:app --host 127.0.0.1 --port 8000
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /health` | Liveness check |
-| `GET /properties?data_root=data` | List properties under `data/` |
-| `GET /listings?csv_path=...` | Listings in a CSV |
-| `GET /snapshot?...` | Full snapshot JSON |
+| `GET /properties?data_root=data` | List configured properties |
+| `POST /sync?data_root=data` | Sync Google Sheets tabs to local cache |
+| `GET /listings?property_folder=...` | Listings for a property |
+| `GET /snapshot?property_folder=...` | Full snapshot JSON |
 
 Example:
 
 ```bash
 curl "http://127.0.0.1:8000/health"
 curl "http://127.0.0.1:8000/properties?data_root=data"
-curl "http://127.0.0.1:8000/snapshot?csv_path=data/lafave/lafave_main_data.csv&start_date=2025-07-04&end_date=2025-07-05&property_id=lafave&property_name=Lafave&date_basis=stay&breakdown_by=listing&bands=0-7,8-14,15-30,31-60,61+&inventory_listings=30"
+curl -X POST "http://127.0.0.1:8000/sync?data_root=data"
+curl "http://127.0.0.1:8000/snapshot?property_folder=lafave&start_date=2025-07-04&end_date=2025-07-05&property_id=LAFAVE&property_name=LaFave&date_basis=stay&breakdown_by=listing&bands=0-7,8-14,15-30,31-60,61+&inventory_listings=30"
 ```
 
 Interactive docs: **http://127.0.0.1:8000/docs**
@@ -148,7 +187,7 @@ In the sidebar you can change API URL, data root, date range, date basis, breakd
 
 ## Docker (optional)
 
-Requires CSVs mounted or copied into `data/` on the host:
+Requires Google Sheets credentials and (for hybrid properties) legacy CSVs under `data/` — see `data/README.md`:
 
 ```bash
 docker compose up --build
@@ -161,15 +200,20 @@ The compose file sets `SNAPSHOT_API_URL=http://api:8000` for the dashboard conta
 
 ## Data (not in git)
 
-Portfolio CSVs are **not committed** (booking/revenue data stays local). After clone:
+Portfolio data is **not committed**. After clone:
+
+1. Configure Google Sheets env vars (`.env.example`)
+2. Place fixed legacy files for hybrid properties if needed (`data/README.md`)
+3. Run `snapshot sync` to populate `data/.cache/sheets/`
 
 ```
 data/
-  lafave/
-    lafave_main_data.csv
+  .cache/sheets/          # synced from Google Sheets
+  Onera/historical_data.csv   # fixed legacy (hybrid)
+  ATX/track_data.csv          # fixed legacy (hybrid)
 ```
 
-Add more properties as `data/<property_id>/*.csv`. Column mapping and defaults live in `config/properties/<folder>.json` and `config/pms/`. The API discovers folders via `GET /properties?data_root=data`.
+Property configs in `config/properties/` drive tab names and ingest rules. The API discovers properties via `GET /properties?data_root=data`.
 
 See `data/README.md` for details.
 
@@ -188,7 +232,8 @@ Internal names after ingest include `booking_date`, `check_in`, `check_out`, `am
 | Issue | Fix |
 |-------|-----|
 | Dashboard: “Cannot reach API” | Start uvicorn on port 8000; check `SNAPSHOT_API_URL` |
-| No properties in sidebar | Add CSV under `data/<id>/`; confirm `data_root` is `data` |
+| No properties in sidebar | Run `snapshot sync`; check Google Sheets env vars |
+| Google Sheets sync fails | Check `GOOGLE_SHEETS_SPREADSHEET_ID` and `GOOGLE_APPLICATION_CREDENTIALS`; share sheet with service account |
 | `snapshot: command not found` | Run `pip install -e .` and activate `.venv` |
 | Port already in use | Change port, e.g. `--port 8001` and update `SNAPSHOT_API_URL` |
 

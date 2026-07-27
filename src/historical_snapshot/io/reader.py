@@ -222,15 +222,20 @@ def _read_csv_text(path: Path) -> str:
     raise ValueError(f"Unable to decode CSV with a supported encoding: {path}")
 
 
-def read_bookings_csv(
-    path: str | Path,
+def read_bookings_rows(
+    rows: Iterable[dict[str, str]],
+    fieldnames: Iterable[str],
     *,
     property_config: PropertyConfig | None = None,
     pms_profile: PmsProfile | None = None,
     apply_postprocess: bool = True,
+    source_label: str = "",
+    row_offset: int = 2,
 ) -> tuple[list[BookingRecord], list[ValidationIssue]]:
     if pms_profile is None and property_config is not None:
-        pms_profile = load_pms_profile(property_config.pms)
+        use_sheets = property_config.data_source is not None and property_config.data_source.is_google_sheets
+        if not use_sheets:
+            pms_profile = load_pms_profile(property_config.pms)
 
     aliases = _aliases_for_profile(pms_profile)
     date_patterns = _date_patterns_for_profile(pms_profile, property_config)
@@ -244,13 +249,8 @@ def read_bookings_csv(
     records: list[BookingRecord] = []
     issues: list[ValidationIssue] = []
 
-    csv_text = _read_csv_text(Path(path))
-    reader = csv.DictReader(io.StringIO(csv_text, newline=""))
-    if not reader.fieldnames:
-        raise ValueError("CSV has no header row.")
-
-    column_map = _resolve_columns(reader.fieldnames, aliases, pms_profile=pms_profile)
-    for row_number, row in enumerate(reader, start=2):
+    column_map = _resolve_columns(fieldnames, aliases, pms_profile=pms_profile)
+    for row_index, row in enumerate(rows, start=row_offset):
         try:
             booking_date = _parse_date(row[column_map["booking_date"]], patterns=date_patterns)
             if "reservation_date" in column_map:
@@ -331,8 +331,31 @@ def read_bookings_csv(
                 )
             )
         except (KeyError, ValueError) as exc:
-            issues.append(ValidationIssue(row_number=row_number, reason=str(exc)))
+            label = f"{source_label} " if source_label else ""
+            issues.append(ValidationIssue(row_number=row_index, reason=f"{label}{exc}"))
 
     if apply_postprocess:
         records = apply_property_postprocess(records, property_config)
     return records, issues
+
+
+def read_bookings_csv(
+    path: str | Path,
+    *,
+    property_config: PropertyConfig | None = None,
+    pms_profile: PmsProfile | None = None,
+    apply_postprocess: bool = True,
+) -> tuple[list[BookingRecord], list[ValidationIssue]]:
+    csv_text = _read_csv_text(Path(path))
+    reader = csv.DictReader(io.StringIO(csv_text, newline=""))
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row.")
+
+    return read_bookings_rows(
+        reader,
+        reader.fieldnames,
+        property_config=property_config,
+        pms_profile=pms_profile,
+        apply_postprocess=apply_postprocess,
+        source_label=str(path),
+    )

@@ -1,0 +1,18 @@
+{
+  "id": "onera",
+  "column_aliases": {
+    "booking_date": ["reservation_date", "booking_date"],
+    "check_in_date": ["check_in_date", "check in date"],
+    "check_out_date": ["check_out_date", "check out date"],
+    "room_revenue": ["revenue", "grand_total", "accommodation_total"],
+    "room_nights": ["nights"],
+    "listing_name": ["listing_name"],
+    "channel": ["channel_group"],
+    "status": ["status"],
+    "property_name": ["property"]
+  },
+  "defaults": {
+    "property_name": "Onera Fredericksburg"
+  },
+  "date_formats": ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"]
+}

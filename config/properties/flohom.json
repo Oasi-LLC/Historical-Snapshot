@@ -4,6 +4,10 @@
   "property_id": "FLOHOM",
   "property_name": "Flohom",
   "inventory_mode": "live_listings",
+  "data_source": {
+    "type": "google_sheets",
+    "tab": "Flohom_data"
+  },
   "listing_inventory": {
     "FLOHOM 1": 1,
     "FLOHOM 2": 1,
@@ -41,6 +45,17 @@
     "FLOHOM 15": "2026-04-14",
     "FLOHOM 16": "2026-04-28",
     "FLOHOM 17": "2026-05-13"
+  },
+  "listing_aliases": {
+    "FLOHOM 01": "FLOHOM 1",
+    "FLOHOM 02": "FLOHOM 2",
+    "FLOHOM 03": "FLOHOM 3",
+    "FLOHOM 04": "FLOHOM 4",
+    "FLOHOM 05": "FLOHOM 5",
+    "FLOHOM 06": "FLOHOM 6",
+    "FLOHOM 07": "FLOHOM 7",
+    "FLOHOM 08": "FLOHOM 8",
+    "FLOHOM 09": "FLOHOM 9"
   },
   "allowed_payment_statuses": ["paid", "partially paid"],
   "exclude_zero_revenue": true,

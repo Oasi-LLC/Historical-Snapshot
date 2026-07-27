@@ -7,8 +7,9 @@ from pathlib import Path
 from historical_snapshot.config import (
     InventoryMode,
     PropertyConfig,
-    load_pms_profile,
+    list_property_configs,
     load_property_config,
+    load_property_config_by_id,
     resolve_property_config,
 )
 from historical_snapshot.core.bands import DEFAULT_BANDS, Band, parse_bands
@@ -24,7 +25,13 @@ from historical_snapshot.core.metrics import (
     total_available_room_nights,
 )
 from historical_snapshot.core.snapshot import snapshot_to_dict
-from historical_snapshot.io.property_reader import read_property_bookings
+from historical_snapshot.io.google_sheets import (
+    read_sync_metadata,
+    sheets_cache_path,
+    sheets_meta_path,
+    sync_all_properties,
+)
+from historical_snapshot.io.property_reader import read_property_bookings, resolve_property_data_path
 from historical_snapshot.models import BookingRecord, ValidationIssue
 
 DEFAULT_DATA_ROOT = Path("data")
@@ -128,6 +135,7 @@ def resolve_inventory_units(
     inventory_mode: InventoryMode,
     manual_units: int | None,
     listing_live_dates: dict[str, date] | None = None,
+    listing_inventory: dict[str, int] | None = None,
     comparable_listings: frozenset[str] | None = None,
 ) -> int:
     if inventory_mode == "live_listings" and listing_live_dates:
@@ -136,6 +144,7 @@ def resolve_inventory_units(
             start_date,
             end_date,
             listings=comparable_listings,
+            listing_inventory=listing_inventory,
         )
     if inventory_mode == "active_listings":
         return count_active_listings(records, start_date, end_date)
@@ -151,6 +160,7 @@ def resolve_available_room_nights(
     inventory_mode: InventoryMode,
     inventory_units: int | None,
     listing_live_dates: dict[str, date] | None = None,
+    listing_inventory: dict[str, int] | None = None,
     listing_name: str | None = None,
     comparable_listings: frozenset[str] | None = None,
 ) -> int | None:
@@ -161,71 +171,207 @@ def resolve_available_room_nights(
             live_date = listing_live_dates.get(listing_name)
             if live_date is None:
                 return 0
-            return listing_available_nights_in_window(live_date, start_date, end_date)
+            units = (listing_inventory or {}).get(listing_name, 1)
+            return (
+                listing_available_nights_in_window(live_date, start_date, end_date) * units
+            )
         listings = comparable_listings if comparable_listings is not None else None
         return total_available_room_nights(
-            listing_live_dates, start_date, end_date, listings=listings
+            listing_live_dates,
+            start_date,
+            end_date,
+            listings=listings,
+            listing_inventory=listing_inventory,
         )
     return None
 
 
+def _property_entry(
+    property_config: PropertyConfig,
+    *,
+    data_root: Path,
+    csv_path: Path | None = None,
+) -> dict:
+    data_source_type = "csv"
+    last_synced_at = None
+    if property_config.data_source and property_config.data_source.is_google_sheets:
+        data_source_type = "google_sheets"
+        meta = read_sync_metadata(
+            sheets_meta_path(property_config, data_root=data_root),
+        )
+        if meta:
+            last_synced_at = meta.get("synced_at")
+        cache_path = sheets_cache_path(property_config, data_root=data_root)
+        if cache_path.is_file():
+            csv_path = cache_path
+    elif csv_path is None:
+        data_dir = data_root / property_config.folder
+        if data_dir.is_dir():
+            csv_files = sorted(data_dir.glob("*.csv"))
+            if csv_files:
+                csv_path = csv_files[0]
+
+    entry: dict = {
+        "id": property_config.property_id,
+        "name": property_config.property_name,
+        "folder": property_config.folder,
+        "data_dir": str(data_root / property_config.folder),
+        "inventory_mode": property_config.inventory_mode,
+        "default_inventory_listings": property_config.default_inventory_listings,
+        "pms": property_config.pms,
+        "data_source": data_source_type,
+        "config": property_config.to_dict(),
+    }
+    if csv_path is not None:
+        entry["csv_path"] = str(csv_path)
+        data_dir = data_root / property_config.folder
+        if data_dir.is_dir():
+            entry["csv_files"] = [str(path) for path in sorted(data_dir.glob("*.csv"))]
+        else:
+            entry["csv_files"] = [str(csv_path)]
+    if last_synced_at:
+        entry["last_synced_at"] = last_synced_at
+    return entry
+
+
 def discover_properties(data_root: Path | str = DEFAULT_DATA_ROOT) -> list[dict]:
     root = Path(data_root)
-    if not root.is_dir():
-        return []
     properties: list[dict] = []
-    for folder in sorted(root.iterdir()):
-        if not folder.is_dir():
-            continue
-        csv_files = sorted(folder.glob("*.csv"))
-        if not csv_files:
-            continue
+    seen_folders: set[str] = set()
 
-        property_config = load_property_config(folder.name)
-        if property_config:
-            prop_id = property_config.property_id
-            prop_name = property_config.property_name
-            inventory_mode = property_config.inventory_mode
-            default_inventory = property_config.default_inventory_listings
-            pms = property_config.pms
+    for property_config in list_property_configs():
+        seen_folders.add(property_config.folder.lower())
+        csv_path: Path | None = None
+        if property_config.data_source and property_config.data_source.is_google_sheets:
+            cache_path = sheets_cache_path(property_config, data_root=root)
+            if cache_path.is_file():
+                csv_path = cache_path
         else:
-            prop_id = folder.name.upper()
-            prop_name = folder.name.replace("_", " ").title()
-            inventory_mode = "manual"
-            default_inventory = None
-            pms = None
+            data_dir = root / property_config.folder
+            if data_dir.is_dir():
+                csv_files = sorted(data_dir.glob("*.csv"))
+                if csv_files:
+                    csv_path = csv_files[0]
 
-        entry: dict = {
-            "id": prop_id,
-            "name": prop_name,
-            "data_dir": str(folder),
-            "csv_path": str(csv_files[0]),
-            "csv_files": [str(p) for p in csv_files],
-            "inventory_mode": inventory_mode,
-            "default_inventory_listings": default_inventory,
-        }
-        if pms:
-            entry["pms"] = pms
-        if property_config:
-            entry["config"] = property_config.to_dict()
-        properties.append(entry)
-    return properties
+        if csv_path is not None or (
+            property_config.data_source and property_config.data_source.is_google_sheets
+        ):
+            properties.append(
+                _property_entry(property_config, data_root=root, csv_path=csv_path)
+            )
+
+    if root.is_dir():
+        for folder in sorted(root.iterdir()):
+            if not folder.is_dir() or folder.name.startswith("."):
+                continue
+            if folder.name.lower() in seen_folders:
+                continue
+            csv_files = sorted(folder.glob("*.csv"))
+            if not csv_files:
+                continue
+
+            property_config = load_property_config(folder.name)
+            if property_config:
+                properties.append(
+                    _property_entry(property_config, data_root=root, csv_path=csv_files[0])
+                )
+            else:
+                properties.append(
+                    {
+                        "id": folder.name.upper(),
+                        "name": folder.name.replace("_", " ").title(),
+                        "folder": folder.name,
+                        "data_dir": str(folder),
+                        "csv_path": str(csv_files[0]),
+                        "csv_files": [str(path) for path in csv_files],
+                        "inventory_mode": "manual",
+                        "default_inventory_listings": None,
+                        "data_source": "csv",
+                    }
+                )
+
+    return sorted(properties, key=lambda item: item["name"].lower())
 
 
-def list_listings(csv_path: str | Path) -> list[str]:
-    property_config, pms_profile = resolve_property_config(csv_path)
-    records, _ = read_property_bookings(
+def sync_properties(
+    *,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
+    property_folder: str | None = None,
+) -> dict:
+    result = sync_all_properties(data_root=data_root, property_folder=property_folder)
+    return {
+        "properties": [
+            {
+                "folder": item.folder,
+                "property_id": item.property_id,
+                "tab": item.tab,
+                "cache_path": str(item.cache_path),
+                "row_count": item.row_count,
+                "synced_at": item.synced_at,
+            }
+            for item in result.properties
+        ],
+        "errors": [{"folder": folder, "error": error} for folder, error in result.errors],
+    }
+
+
+def resolve_snapshot_csv_path(
+    *,
+    csv_path: str | Path | None = None,
+    property_folder: str | None = None,
+    property_id: str | None = None,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
+) -> tuple[Path, PropertyConfig | None]:
+    property_config: PropertyConfig | None = None
+    if property_folder:
+        property_config = load_property_config(property_folder)
+    elif property_id:
+        property_config = load_property_config_by_id(property_id)
+    elif csv_path is not None:
+        property_config, _ = resolve_property_config(csv_path)
+
+    if property_config is None:
+        if csv_path is None:
+            raise ValueError("csv_path or property_folder/property_id is required")
+        path = Path(csv_path)
+        if not path.is_file():
+            raise ValueError(f"CSV not found: {csv_path}")
+        return path, None
+
+    resolved = resolve_property_data_path(
+        property_config,
         csv_path,
+        data_root=data_root,
+    )
+    return resolved, property_config
+
+
+def list_listings(
+    csv_path: str | Path | None = None,
+    *,
+    property_folder: str | None = None,
+    property_id: str | None = None,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
+) -> list[str]:
+    resolved_path, property_config = resolve_snapshot_csv_path(
+        csv_path=csv_path,
+        property_folder=property_folder,
+        property_id=property_id,
+        data_root=data_root,
+    )
+    records, _ = read_property_bookings(
+        resolved_path,
         property_config=property_config,
+        data_root=data_root,
     )
     return sorted({r.listing_name or r.property_id for r in records if r.listing_name or r.property_id})
 
 
 def run_snapshot(
-    csv_path: str | Path,
     start_date: str | date,
     end_date: str | date,
     *,
+    csv_path: str | Path | None = None,
     property_id: str = "LAFAVE",
     property_name: str = "LaFave",
     date_basis: DateBasis = "stay",
@@ -234,6 +380,7 @@ def run_snapshot(
     inventory_listings: int = 30,
     inventory_mode: InventoryMode | None = None,
     property_folder: str | None = None,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
     as_of_date: str | date | None = None,
     yoy_compare_start_date: str | date | None = None,
     yoy_compare_end_date: str | date | None = None,
@@ -254,12 +401,23 @@ def run_snapshot(
 
     if property_folder:
         property_config = load_property_config(property_folder)
-    else:
+    elif csv_path is not None:
         property_config, _pms_profile = resolve_property_config(
             csv_path,
             property_id=property_id,
             property_name=property_name,
         )
+    else:
+        property_config = load_property_config_by_id(property_id)
+
+    resolved_csv_path, resolved_config = resolve_snapshot_csv_path(
+        csv_path=csv_path,
+        property_folder=property_folder or (property_config.folder if property_config else None),
+        property_id=property_id if property_config is None else None,
+        data_root=data_root,
+    )
+    if property_config is None:
+        property_config = resolved_config
     if property_config:
         property_id = property_config.property_id
         property_name = property_config.property_name
@@ -276,11 +434,13 @@ def run_snapshot(
 
     parsed_bands = bands if isinstance(bands, list) else parse_bands(bands)
     records, issues = read_property_bookings(
-        csv_path,
+        resolved_csv_path,
         property_config=property_config,
+        data_root=data_root,
     )
 
     live_dates = property_config.listing_live_dates if property_config else {}
+    listing_inventory = property_config.listing_inventory if property_config else {}
     comparable_listings: frozenset[str] | None = None
     if (
         inventory_mode == "live_listings"
@@ -305,6 +465,7 @@ def run_snapshot(
         inventory_mode=inventory_mode,
         manual_units=inventory_listings,
         listing_live_dates=live_dates or None,
+        listing_inventory=listing_inventory or None,
         comparable_listings=comparable_listings,
     )
     portfolio_available_nights = resolve_available_room_nights(
@@ -313,6 +474,7 @@ def run_snapshot(
         inventory_mode=inventory_mode,
         inventory_units=portfolio_inventory,
         listing_live_dates=live_dates or None,
+        listing_inventory=listing_inventory or None,
         comparable_listings=comparable_listings,
     )
 
@@ -356,6 +518,7 @@ def run_snapshot(
             inventory_mode=inventory_mode,
             inventory_units=breakdown_inventory_units(bucket_id),
             listing_live_dates=live_dates or None,
+            listing_inventory=listing_inventory or None,
             listing_name=bucket_id if breakdown_by == "listing" else None,
             comparable_listings=comparable_listings,
         )

@@ -1,11 +1,65 @@
 from __future__ import annotations
 
+import os
+from collections import OrderedDict
 from pathlib import Path
 
 from historical_snapshot.config import PropertyConfig, load_pms_profile
 from historical_snapshot.io.google_sheets import sheets_cache_path, sync_property_tab
 from historical_snapshot.io.reader import read_bookings_csv
 from historical_snapshot.models import BookingRecord, ValidationIssue
+
+# In-process cache of parsed bookings, keyed by the resolved source file(s) and
+# their (mtime, size) signatures. A single chat turn can trigger several
+# snapshot computations against the same property (current period, pacing vs
+# last year, prior-year final, etc.), each of which previously re-read and
+# re-parsed the same CSV/Sheets-cache file from disk. Caching here preserves
+# read_property_bookings' exact return values while avoiding that redundant
+# I/O + parsing; entries are invalidated automatically whenever the underlying
+# file's mtime/size changes (e.g. after a Google Sheets sync writes a fresh
+# cache file). Set BOOKINGS_CACHE_DISABLE=true to bypass entirely (debugging).
+_BOOKINGS_CACHE_MAX_ENTRIES = 64
+_bookings_cache: "OrderedDict[tuple, tuple[list[BookingRecord], list[ValidationIssue]]]" = (
+    OrderedDict()
+)
+
+
+def _bookings_cache_disabled() -> bool:
+    return os.environ.get("BOOKINGS_CACHE_DISABLE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _file_signature(path: Path) -> tuple[str, float, int]:
+    try:
+        stat = path.stat()
+        return (str(path), stat.st_mtime, stat.st_size)
+    except OSError:
+        return (str(path), -1.0, -1)
+
+
+def clear_bookings_cache() -> None:
+    """Drop all cached parsed bookings (mainly for tests)."""
+    _bookings_cache.clear()
+
+
+def _cache_get(
+    key: tuple,
+) -> tuple[list[BookingRecord], list[ValidationIssue]] | None:
+    cached = _bookings_cache.get(key)
+    if cached is None:
+        return None
+    # Refresh recency for a simple LRU eviction policy.
+    _bookings_cache.move_to_end(key)
+    return cached
+
+
+def _cache_put(
+    key: tuple,
+    value: tuple[list[BookingRecord], list[ValidationIssue]],
+) -> None:
+    _bookings_cache[key] = value
+    _bookings_cache.move_to_end(key)
+    while len(_bookings_cache) > _BOOKINGS_CACHE_MAX_ENTRIES:
+        _bookings_cache.popitem(last=False)
 
 
 def _property_data_dir(property_config: PropertyConfig, csv_path: str | Path) -> Path:
@@ -82,7 +136,7 @@ def resolve_property_data_path(
     raise ValueError(f"No data file found for property: {property_config.folder}")
 
 
-def read_property_bookings(
+def _read_property_bookings_uncached(
     csv_path: str | Path,
     *,
     property_config: PropertyConfig | None,
@@ -131,3 +185,66 @@ def read_property_bookings(
 
     merged = apply_property_postprocess(merged, property_config)
     return merged, issues
+
+
+def _cache_signature_paths(
+    csv_path: str | Path,
+    *,
+    property_config: PropertyConfig | None,
+    data_root: Path | str,
+) -> list[Path] | None:
+    """Best-effort list of files this call will actually read, for cache-keying.
+
+    Returns None if resolution can't be determined cheaply/safely without side
+    effects (e.g. would trigger a Google Sheets network sync) - callers should
+    skip caching in that case rather than risk a stale/incorrect key.
+    """
+    if property_config is None:
+        return [Path(csv_path)]
+
+    if property_config.data_source and property_config.data_source.is_google_sheets:
+        cache_path = sheets_cache_path(property_config, data_root=data_root)
+        if not cache_path.is_file():
+            return None
+        return [cache_path]
+
+    if not property_config.data_sources:
+        return [Path(csv_path)]
+
+    data_dir = _property_data_dir(property_config, csv_path)
+    return [data_dir / source.file for source in property_config.data_sources]
+
+
+def read_property_bookings(
+    csv_path: str | Path,
+    *,
+    property_config: PropertyConfig | None,
+    data_root: Path | str = "data",
+) -> tuple[list[BookingRecord], list[ValidationIssue]]:
+    if _bookings_cache_disabled():
+        return _read_property_bookings_uncached(
+            csv_path, property_config=property_config, data_root=data_root
+        )
+
+    signature_paths = _cache_signature_paths(
+        csv_path, property_config=property_config, data_root=data_root
+    )
+    if signature_paths is None:
+        return _read_property_bookings_uncached(
+            csv_path, property_config=property_config, data_root=data_root
+        )
+
+    key = (
+        property_config.property_id if property_config else None,
+        tuple(_file_signature(path) for path in signature_paths),
+    )
+    cached = _cache_get(key)
+    if cached is not None:
+        records, issues = cached
+        return list(records), list(issues)
+
+    records, issues = _read_property_bookings_uncached(
+        csv_path, property_config=property_config, data_root=data_root
+    )
+    _cache_put(key, (records, issues))
+    return list(records), list(issues)

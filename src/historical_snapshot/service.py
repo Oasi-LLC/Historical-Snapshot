@@ -31,6 +31,7 @@ from historical_snapshot.io.google_sheets import (
     sheets_meta_path,
     sync_all_properties,
 )
+from historical_snapshot.io.sync_policy import ensure_daily_sync as _ensure_daily_sync
 from historical_snapshot.io.property_reader import read_property_bookings, resolve_property_data_path
 from historical_snapshot.models import BookingRecord, ValidationIssue
 
@@ -293,12 +294,7 @@ def discover_properties(data_root: Path | str = DEFAULT_DATA_ROOT) -> list[dict]
     return sorted(properties, key=lambda item: item["name"].lower())
 
 
-def sync_properties(
-    *,
-    data_root: Path | str = DEFAULT_DATA_ROOT,
-    property_folder: str | None = None,
-) -> dict:
-    result = sync_all_properties(data_root=data_root, property_folder=property_folder)
+def _sync_result_to_dict(result) -> dict:
     return {
         "properties": [
             {
@@ -313,6 +309,30 @@ def sync_properties(
         ],
         "errors": [{"folder": folder, "error": error} for folder, error in result.errors],
     }
+
+
+def sync_properties(
+    *,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
+    property_folder: str | None = None,
+) -> dict:
+    result = sync_all_properties(data_root=data_root, property_folder=property_folder)
+    return _sync_result_to_dict(result)
+
+
+def ensure_daily_sync(
+    *,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
+    timezone: str | None = None,
+    force: bool = False,
+) -> dict | None:
+    from historical_snapshot.io.sync_policy import sync_timezone
+
+    tz = sync_timezone(timezone)
+    result = _ensure_daily_sync(data_root=data_root, tz=tz, force=force)
+    if result is None:
+        return None
+    return _sync_result_to_dict(result)
 
 
 def resolve_snapshot_csv_path(

@@ -237,6 +237,25 @@ Internal names after ingest include `booking_date`, `check_in`, `check_out`, `am
 | `snapshot: command not found` | Run `pip install -e .` and activate `.venv` |
 | Port already in use | Change port, e.g. `--port 8001` and update `SNAPSHOT_API_URL` |
 
+
+
+## Chat API (natural language)
+
+Ask performance questions in plain text via `POST /chat` (uses the same snapshot engine as the dashboard):
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How did Onera do on July 31 2026 vs last year?"}'
+```
+
+Example messages:
+- `Onera July 31 2026`
+- `LaFave Jul 4-5 2025 vs last year`
+- `Diamond at Onera on July 31 2026`
+
+Slack integration is planned as a follow-up.
+
 ## License
 
 Internal use — Oasi LLC. Contact the repo owners for access and data handling policy.

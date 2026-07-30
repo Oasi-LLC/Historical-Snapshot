@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from pydantic import BaseModel, Field
+
+from historical_snapshot.chat import handle_chat_message
 from historical_snapshot.core.bands import DEFAULT_BANDS
 from historical_snapshot.service import (
     DEFAULT_DATA_ROOT,
@@ -20,6 +23,21 @@ app = FastAPI(
     description="Property performance snapshots for revenue management.",
     version="0.3.0",
 )
+
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="Natural-language performance question")
+    data_root: str = Field(default=str(DEFAULT_DATA_ROOT))
+
+
+class ChatResponseModel(BaseModel):
+    reply: str
+    query: Optional[dict[str, Any]]
+    confidence: float
+    needs_clarification: bool
+    snapshots: Optional[dict[str, Any]]
+    parser: str
 
 app.add_middleware(
     CORSMiddleware,
@@ -143,3 +161,13 @@ def get_snapshot(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result.to_dict()
+
+@app.post("/chat", response_model=ChatResponseModel)
+def chat(request: ChatRequest) -> ChatResponseModel:
+    try:
+        result = handle_chat_message(request.message, data_root=request.data_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = result.to_dict()
+    return ChatResponseModel(**payload)
+

@@ -10,7 +10,9 @@ dependencies = []
 api = ["fastapi>=0.115.0", "uvicorn[standard]>=0.32.0"]
 dashboard = ["streamlit>=1.40.0", "pandas>=2.0.0", "requests>=2.32.0"]
 sheets = ["gspread>=6.0.0", "google-auth>=2.0.0"]
-all = ["historical-snapshot-cli[api,dashboard,sheets]"]
+slack = ["slack-bolt>=1.18.0"]
+llm = ["anthropic>=0.40.0"]
+all = ["historical-snapshot-cli[api,dashboard,sheets,slack,llm]"]
 
 [project.scripts]
 snapshot = "historical_snapshot.cli:main"

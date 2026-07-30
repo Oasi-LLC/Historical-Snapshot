@@ -73,7 +73,21 @@ def _apply_listing_groups(
 
 
 def _canonical_listing(listing_name: str, listing_aliases: dict[str, str]) -> str:
-    return listing_aliases.get(listing_name, listing_name)
+    if listing_name in listing_aliases:
+        return listing_aliases[listing_name]
+    # Punctuation-insensitive fallback (e.g. "Great Lodge King Room" vs "Great Lodge: King Room").
+    import re
+
+    def _norm(value: str) -> str:
+        text = value.lower()
+        text = re.sub(r"[:|/•,_\-–—]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    needle = _norm(listing_name)
+    for alias, canonical in listing_aliases.items():
+        if _norm(alias) == needle:
+            return canonical
+    return listing_name
 
 
 def _expand_combo_listing(listing_name: str, combo_splits: dict[str, list[str]]) -> str:

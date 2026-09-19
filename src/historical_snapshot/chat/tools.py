@@ -30,6 +30,10 @@ OPTIONAL_FIELDS: list[str] = [
     "cancellations",
     "cancellation_rate",
     "lead_time_distribution",
+    "day_type_breakdown",
+    "dow_breakdown",
+    "channel_deep_metrics",
+    "adr_distribution",
 ]
 
 ALL_FIELDS: list[str] = DEFAULT_METRICS + OPTIONAL_FIELDS
@@ -82,7 +86,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "description": (
                         "Metrics to return. Defaults to core portfolio metrics. "
                         "Add listing_breakdown for top units/listings; channel_breakdown "
-                        "for channel mix; lead_time_distribution for booking-window bands."
+                        "for channel mix; lead_time_distribution for booking-window bands; "
+                        "day_type_breakdown for Sun-Thu vs Fri-Sat sub-metrics (occupancy, "
+                        "ADR, RevPAR); dow_breakdown for per-day-of-week occupancy/ADR/RevPAR; "
+                        "channel_deep_metrics for ADR distribution and RevPAR-of-total-available "
+                        "per channel (beyond the basic channel_breakdown mix); adr_distribution "
+                        "for mean/median/max/p25/p75 ADR across the window."
                     ),
                     "items": {"type": "string", "enum": list(ALL_FIELDS)},
                 },
@@ -96,7 +105,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "blocks: header, performance, top_listings, listing_compare, "
                         "channel_mix, none. "
                         "basis: current, ly_pace, ly_final. "
-                        "listings: exact unit names when comparing or drilling down."
+                        "listings: exact unit names when comparing or drilling down. "
+                        "listing_compare works even when a named listing has no prior-year "
+                        "data (e.g. a brand-new unit) — it still returns real current-window "
+                        "numbers for it rather than $0, plus comparison_summary (who leads "
+                        "each metric and by how much) and, for listings with no LY data, a "
+                        "monthly ramp_series since go-live."
                     ),
                     "properties": {
                         "intent": {"type": "string"},
@@ -412,6 +426,80 @@ def _lead_time_distribution(portfolio: dict | None) -> dict[str, Any] | None:
     }
 
 
+def _adr_distribution(portfolio: dict | None) -> dict[str, Any] | None:
+    if not portfolio:
+        return None
+    return {
+        "mean": portfolio.get("adr"),
+        "median": portfolio.get("adr_median"),
+        "max": portfolio.get("adr_max"),
+        "p25": portfolio.get("adr_p25"),
+        "p75": portfolio.get("adr_p75"),
+    }
+
+
+def _comparison_summary(current_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Per-metric lead/delta between exactly two compared listings.
+
+    Pre-computed here so the interpretation prompt can cite "who's ahead and
+    by how much" directly instead of inferring it from two raw table rows -
+    same no-self-derived-arithmetic rule as gap_summary in executor.py.
+    """
+    if len(current_rows) != 2:
+        return None
+    a, b = current_rows
+    name_a = a.get("listing")
+    name_b = b.get("listing")
+    if not name_a or not name_b:
+        return None
+
+    def _pair(field: str) -> dict[str, Any] | None:
+        av, bv = a.get(field), b.get(field)
+        if av is None or bv is None:
+            return None
+        av_f, bv_f = float(av), float(bv)
+        leader = None if av_f == bv_f else (name_a if av_f > bv_f else name_b)
+        return {"leader": leader, "delta": round(abs(av_f - bv_f), 2)}
+
+    return {
+        "listing_a": name_a,
+        "listing_b": name_b,
+        "revenue": _pair("room_revenue"),
+        "adr": _pair("adr"),
+        "occupancy_pct": _pair("occupancy_pct"),
+        "revpar": _pair("revpar"),
+    }
+
+
+def _ramp_series_for_compare(
+    *,
+    config: Any,
+    compare_names: list[str],
+    ly_final_rows: list[dict[str, Any]],
+    data_root: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Monthly since-go-live ramp, scoped to compared listings with no LY data.
+
+    Established listings with real prior-year numbers don't need a ramp view
+    and skip the extra computation - this only runs for listings whose LY-final
+    row came back empty (the "brand new unit" case this compare mode exists
+    for in the first place).
+    """
+    from historical_snapshot.service import run_listing_ramp_series
+
+    by_name = {row.get("listing"): row for row in ly_final_rows}
+    series: dict[str, list[dict[str, Any]]] = {}
+    for name in compare_names:
+        row = by_name.get(name)
+        has_ly_data = bool(row and (row.get("bookings_count") or row.get("room_revenue")))
+        if has_ly_data:
+            continue
+        ramp = run_listing_ramp_series(name, property_folder=config.folder, data_root=data_root)
+        if ramp:
+            series[name] = ramp
+    return series
+
+
 def _unavailable(field: str) -> dict[str, Any]:
     return {
         "available": False,
@@ -455,6 +543,34 @@ def _resolve_optional_field(
             "current": _lead_time_distribution(pace),
             "ly_pace": _lead_time_distribution(prior_pace),
             "ly_final": _lead_time_distribution(prior_final),
+        }
+
+    if field == "day_type_breakdown":
+        return {
+            "current": (pace or {}).get("day_type_metrics") or {},
+            "ly_pace": (prior_pace or {}).get("day_type_metrics") or {},
+            "ly_final": (prior_final or {}).get("day_type_metrics") or {},
+        }
+
+    if field == "dow_breakdown":
+        return {
+            "current": (pace or {}).get("dow_metrics") or {},
+            "ly_pace": (prior_pace or {}).get("dow_metrics") or {},
+            "ly_final": (prior_final or {}).get("dow_metrics") or {},
+        }
+
+    if field == "channel_deep_metrics":
+        return {
+            "current": (pace or {}).get("channel_deep_metrics") or {},
+            "ly_pace": (prior_pace or {}).get("channel_deep_metrics") or {},
+            "ly_final": (prior_final or {}).get("channel_deep_metrics") or {},
+        }
+
+    if field == "adr_distribution":
+        return {
+            "current": _adr_distribution(pace),
+            "ly_pace": _adr_distribution(prior_pace),
+            "ly_final": _adr_distribution(prior_final),
         }
 
     if field in {"cancellations", "cancellation_rate"}:
@@ -552,6 +668,7 @@ def resolve_and_run_snapshot(
         inventory_mode=config.inventory_mode,
         prior_stay_start_date=prior_stay_start,
         prior_stay_end_date=prior_stay_end,
+        compare_listings=tuple(compare_names),
     )
     result = execute_query(query, data_root=data_root)
 
@@ -585,15 +702,32 @@ def resolve_and_run_snapshot(
             metrics[field] = _build_metric(field, pace, prior_pace, prior_final)
 
     if compare_names:
+        current_rows = _listing_rows_for_names(result.pace_current, compare_names)
+        ly_pace_rows = _listing_rows_for_names(result.pace_prior, compare_names)
+        ly_final_rows = _listing_rows_for_names(result.prior_final, compare_names)
         metrics["listing_compare"] = {
             "names": compare_names,
             "focus": compare_focus or "ly_final",
         }
         metrics["listing_breakdown"] = {
-            "current": _listing_rows_for_names(result.pace_current, compare_names),
-            "ly_pace": _listing_rows_for_names(result.pace_prior, compare_names),
-            "ly_final": _listing_rows_for_names(result.prior_final, compare_names),
+            "current": current_rows,
+            "ly_pace": ly_pace_rows,
+            "ly_final": ly_final_rows,
         }
+        comparison_summary = _comparison_summary(current_rows)
+        if comparison_summary is not None:
+            metrics["comparison_summary"] = comparison_summary
+        ramp_series = _ramp_series_for_compare(
+            config=config,
+            compare_names=compare_names,
+            ly_final_rows=ly_final_rows,
+            data_root=data_root,
+        )
+        if ramp_series:
+            metrics["ramp_series"] = ramp_series
+
+    if result.gap_summary is not None:
+        metrics["gap_summary"] = result.gap_summary
 
     if answer_plan is not None:
         report = render_answer_plan(answer_plan, result, metrics)

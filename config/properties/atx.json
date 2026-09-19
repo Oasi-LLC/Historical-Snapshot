@@ -19,7 +19,13 @@
   },
   "listing_aliases": {
     "Malvern": "Malvern (4BR)",
+    "MLVRN (4BR in Loft + Airstream)": "Malvern (4BR)",
     "MLVRN (3BR in Loft + Airstream)": "Malvern (3BR)"
+  },
+  "listing_live_dates": {
+    "Sunstrip": "2000-01-01",
+    "Malvern (4BR)": "2000-01-01",
+    "Malvern (3BR)": "2000-01-01"
   },
   "allowed_listings": ["Sunstrip", "Malvern (4BR)", "Malvern (3BR)"],
   "allowed_reservation_statuses": ["new", "modified", "checked out"],

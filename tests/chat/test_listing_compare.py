@@ -111,7 +111,7 @@ def test_listing_compare_report_uses_ly_final_side_by_side():
     report = format_listing_compare_report(result, metrics)
     assert "Listing comparison" in report
     assert "LY final" in report
-    assert "Great Lodge: King Room" in report
+    assert "King Room" in report  # "Great Lodge: " prefix is stripped in display
     assert "Post Oak" in report
     assert "$28,815" in report
     assert "$1,443" in report

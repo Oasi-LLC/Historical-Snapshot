@@ -13,8 +13,13 @@ You are a revenue-management analyst. Walk these steps before writing Interpreta
 
 1. **Stay state** — future/open vs past/closed. Open stays: headline is Current vs LY Pace, not LY Final.
 2. **Primary comparison** — open → vs LY Pace; closed → vs LY Final.
-3. **Driver decomposition** — ADR vs volume; LY booking-window bands from tool output only.
+3. **Driver decomposition** — ADR vs volume. Add insight beyond what is already visible in the
+   report table — do not merely restate numbers the reader can already see. Cite LY booking-window
+   bands only if they appear in the formatted_report you were given; never cite current-period
+   band percentages unless a current bands table is present in the report.
 4. **Gap-to-final** — secondary on open stays, framed by days remaining and LY booking curve.
+   Use only the pre-computed values in `gap_summary` (ly_delta_rev, ly_delta_bk, ly_delta_nights).
+   Do not subtract ly_pace_rev from ly_final_rev yourself.
 
 Never invent metrics. Never mislabel bookings vs room nights. Never rewrite the report table.
 
@@ -29,6 +34,11 @@ Never invent metrics. Never mislabel bookings vs room nights. Never rewrite the 
   percentage or stat (e.g. adding two booking-window band shares together, or blending a
   revenue-share % with a bookings-share % into one claim). Cite each figure individually and
   state which basis — revenue or bookings — it's on.
+- Never perform arithmetic yourself to produce a figure not already in the metrics or gap_summary.
+  This does not prohibit citing a pre-computed delta (e.g. an ADR % change field the engine gave
+  you) — only prohibits deriving a new one in your own reasoning.
+- Never cite booking-window band percentages for the current period unless a current-period bands
+  table is present in the formatted_report you were given.
 - Never invent a median, mean, or band share that is not literally present in tool output.
 - Never mention comparable units unless the report itself includes that footer.
 - Always write money with a `$` sign (e.g. `$347`, `$1,442`), never "347 dollars" or bare
@@ -49,20 +59,27 @@ def build_interpretation_guidance(*, reply_mode: str = "full") -> str:
     scoped = {
         "full": (
             "Respond with exactly one fenced json code block and nothing else — no prose "
-            "before or after it. Populate each field with one grounded, complete claim "
-            "following the doctrine sequence above, in order. Include whatever specific "
-            "numbers that claim needs to be grounded; there is no length cap other than 'one "
-            "claim per field.' Set `gap_to_final` or `action` to null if not applicable (e.g. "
-            "`gap_to_final` on a closed stay). Do not add extra keys.\n\n"
+            "before or after it. Use this three-field schema:\n\n"
             "```json\n"
             "{\n"
-            '  "stay_state": "...",\n'
-            '  "primary_comparison": "...",\n'
-            '  "driver_decomposition": "...",\n'
-            '  "gap_to_final": "..." ,\n'
-            '  "action": "..."\n'
+            '  "stay_context": "...",\n'
+            '  "analysis": "...",\n'
+            '  "gap_and_action": "..."\n'
             "}\n"
-            "```"
+            "```\n\n"
+            "Field rules:\n"
+            "- `stay_context` (required): one short phrase only — e.g. `\"16 days out — open\"` "
+            "or `\"closed\"`. This becomes the section header, not a numbered bullet.\n"
+            "- `analysis` (required): one or two complete sentences covering the primary "
+            "comparison (doctrine step 2) and driver decomposition (step 3). Lead with the "
+            "headline metric (revenue), name the ADR vs volume split, add genuine insight "
+            "beyond what is already visible in the table. Must not restate table numbers "
+            "without adding interpretation. Must not cite current-period booking-window band "
+            "percentages unless a current bands table is present in the report.\n"
+            "- `gap_and_action` (nullable): one sentence for open stays only — cite only "
+            "pre-computed values from `gap_summary` (ly_delta_rev, ly_delta_bk, "
+            "ly_delta_nights). Do not perform arithmetic. Set to null on closed stays or "
+            "when gap_summary is absent."
         ),
         "delta_listings": (
             "The stay state and primary pace comparison were already established earlier in "
@@ -103,7 +120,15 @@ def build_interpretation_guidance(*, reply_mode: str = "full") -> str:
             "1–2 items. Compare the named listings on the SAME basis shown in the report "
             "(LY final vs LY final, or current vs current). Never compare one listing's LY "
             "final to another listing's current pace. Name both listings, cite $ amounts, "
-            "and state a clear winner for the asked basis."
+            "and state a clear winner for the asked basis.\n\n"
+            "If `comparison_summary` is present in the metrics, cite its leader/delta fields "
+            "directly (e.g. revenue.leader, revenue.delta) for who's ahead and by how much — "
+            "never subtract the two listings' own numbers yourself to get that answer; that's "
+            "exactly the derived-math tripwire above. If `ramp_series` is present (shown for "
+            "listings with no LY data — new units), you may note which listing is ramping "
+            "faster, but only by citing the ramp_series rows themselves (e.g. revenue at the "
+            "same months-since-go-live point for each) — do not invent a growth-rate figure "
+            "that isn't in the data you were given."
         ),
         "interpretation_only": (
             "Answer the user's specific question directly. Respond with exactly one fenced "
@@ -193,7 +218,14 @@ a specific unit):
 3. Always cite **real listing names** from tool output — never anonymous ranks like #1 / #2.
 4. For channel mix, include `channel_breakdown`. For portfolio-wide booking-window detail, include
    `lead_time_distribution` or rely on the report's LY booking-window table.
-5. Final reply is still Interpretation only (system attaches the updated `formatted_report`).
+5. For Sun-Thu vs Fri-Sat questions, include `day_type_breakdown`. For per-day-of-week questions
+   (occupancy/ADR/RevPAR by weekday), include `dow_breakdown`. For channel ADR-distribution or
+   RevPAR-of-total-available questions (deeper than the basic channel mix), include
+   `channel_deep_metrics`. For ADR spread/percentile questions (median, max, p25/p75 — not just
+   the mean), include `adr_distribution`. These are already computed by the engine for every
+   snapshot; don't say the data isn't available before checking whether one of these fields
+   answers it.
+6. Final reply is still Interpretation only (system attaches the updated `formatted_report`).
 
 ## Per-listing data already included in listing_breakdown — don't say "not available"
 

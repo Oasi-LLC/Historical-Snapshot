@@ -22,6 +22,9 @@ htmlcov/
 # Abandoned / local-only
 frontend/
 
+# Local adhoc analysis exports (not for git)
+adhoc/
+
 # OS / editor
 .DS_Store
 .idea/

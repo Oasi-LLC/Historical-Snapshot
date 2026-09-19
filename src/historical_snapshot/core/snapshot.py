@@ -11,8 +11,19 @@ def _decimal_to_float(value: Decimal | None) -> float | None:
     return float(value)
 
 
-def snapshot_to_dict(snapshot: SnapshotMetrics) -> dict:
+def _adr_stats_to_dict(stats) -> dict:
     return {
+        "mean": _decimal_to_float(stats.mean),
+        "median": _decimal_to_float(stats.median),
+        "max": _decimal_to_float(stats.max),
+        "p25": _decimal_to_float(stats.p25),
+        "p75": _decimal_to_float(stats.p75),
+        "count": stats.count,
+    }
+
+
+def snapshot_to_dict(snapshot: SnapshotMetrics) -> dict:
+    d = {
         "property_id": snapshot.property_id,
         "property_name": snapshot.property_name,
         "date_range": {
@@ -65,6 +76,57 @@ def snapshot_to_dict(snapshot: SnapshotMetrics) -> dict:
             for channel, metrics in snapshot.channel_mix.items()
         },
     }
+
+    if snapshot.adr_median is not None:
+        d["adr_median"] = _decimal_to_float(snapshot.adr_median)
+        d["adr_max"] = _decimal_to_float(snapshot.adr_max)
+        d["adr_p25"] = _decimal_to_float(snapshot.adr_p25)
+        d["adr_p75"] = _decimal_to_float(snapshot.adr_p75)
+
+    if snapshot.day_type_metrics is not None:
+        d["day_type_metrics"] = {
+            dt: {
+                "available_room_nights": m.available_room_nights,
+                "bookings_touching": m.bookings_touching,
+                "room_nights_sold": m.room_nights_sold,
+                "room_revenue": _decimal_to_float(m.room_revenue),
+                "adr_weighted": _decimal_to_float(m.adr_weighted),
+                "adr_stats": _adr_stats_to_dict(m.adr_stats),
+                "occupancy_pct": _decimal_to_float(m.occupancy_pct),
+                "revpar": _decimal_to_float(m.revpar),
+            }
+            for dt, m in snapshot.day_type_metrics.items()
+        }
+
+    if snapshot.channel_deep_metrics is not None:
+        d["channel_deep_metrics"] = {
+            ch: {
+                "bookings_count": m.bookings_count,
+                "room_nights": m.room_nights,
+                "room_revenue": _decimal_to_float(m.room_revenue),
+                "adr_weighted": _decimal_to_float(m.adr_weighted),
+                "adr_stats": _adr_stats_to_dict(m.adr_stats),
+                "revenue_share_pct": _decimal_to_float(m.revenue_share_pct),
+                "nights_share_pct": _decimal_to_float(m.nights_share_pct),
+                "revpar_of_total_available": _decimal_to_float(m.revpar_of_total_available),
+            }
+            for ch, m in snapshot.channel_deep_metrics.items()
+        }
+
+    if snapshot.dow_metrics is not None:
+        d["dow_metrics"] = {
+            dow: {
+                "available_room_nights": m.available_room_nights,
+                "room_nights_sold": m.room_nights_sold,
+                "room_revenue": _decimal_to_float(m.room_revenue),
+                "adr_weighted": _decimal_to_float(m.adr_weighted),
+                "occupancy_pct": _decimal_to_float(m.occupancy_pct),
+                "revpar": _decimal_to_float(m.revpar),
+            }
+            for dow, m in snapshot.dow_metrics.items()
+        }
+
+    return d
 
 
 def snapshot_to_text(snapshot: SnapshotMetrics, invalid_row_count: int) -> str:

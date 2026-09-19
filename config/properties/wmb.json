@@ -29,11 +29,21 @@
     "Greenhouse Pet": "Greenhouse (Pet Friendly)",
     "Spyglass Pet": "Spyglass (Pet Friendly)",
     "Greenhouse Accessible": "Greenhouse (Accessible)",
-    "Spyglass Accessible": "Spyglass (Accessible)"
+    "Spyglass Accessible": "Spyglass (Accessible)",
+    "Greenhouse ADA": "Greenhouse (Accessible)",
+    "Spyglass ADA": "Spyglass (Accessible)"
   },
   "grouping_inventory": {
     "Greenhouse": 16,
     "Spyglass": 12
+  },
+  "listing_live_dates": {
+    "Greenhouse": "2000-01-01",
+    "Greenhouse (Accessible)": "2000-01-01",
+    "Greenhouse (Pet Friendly)": "2000-01-01",
+    "Spyglass": "2000-01-01",
+    "Spyglass (Accessible)": "2000-01-01",
+    "Spyglass (Pet Friendly)": "2000-01-01"
   },
   "exclude_zero_revenue": true,
   "excluded_statuses": ["cancelled", "confirmation pending"],

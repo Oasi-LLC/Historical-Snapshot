@@ -21,6 +21,7 @@ class ChatSnapshotQuery:
     inventory_mode: str = "manual"
     prior_stay_start_date: date | None = None
     prior_stay_end_date: date | None = None
+    compare_listings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class ChatSnapshotQuery:
             "prior_stay_end_date": (
                 self.prior_stay_end_date.isoformat() if self.prior_stay_end_date else None
             ),
+            "compare_listings": list(self.compare_listings),
         }
 
 
@@ -71,6 +73,7 @@ class ChatSnapshotResult:
     listing_pace_prior: dict | None = None
     listing_prior_final: dict | None = None
     comparable_listings: list[str] = field(default_factory=list)
+    gap_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -94,6 +97,8 @@ class ChatSnapshotResult:
                 payload[key] = value
         if self.comparable_listings:
             payload["comparable_listings"] = self.comparable_listings
+        if self.gap_summary is not None:
+            payload["gap_summary"] = self.gap_summary
         return payload
 
 

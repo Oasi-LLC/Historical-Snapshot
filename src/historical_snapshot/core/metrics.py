@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Iterable
@@ -17,6 +17,231 @@ def booking_window_days_for_record(record: BookingRecord) -> int:
 CANCELLED_STATUSES = {"cancelled", "canceled", "void"}
 
 DateBasis = str  # "stay", "arrival", or "reservation"
+
+DOW_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKEND_WEEKDAYS = {4, 5}  # Friday=4, Saturday=5
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def classify_day_type(d: date) -> str:
+    """Return 'Fri-Sat' or 'Sun-Thu' for a given date."""
+    return "Fri-Sat" if d.weekday() in WEEKEND_WEEKDAYS else "Sun-Thu"
+
+
+def prorate_revenue(total_revenue: Decimal, total_nights: int) -> Decimal:
+    """Even per-night proration of a booking's revenue."""
+    if total_nights <= 0:
+        return Decimal("0")
+    return total_revenue / Decimal(total_nights)
+
+
+# ---------------------------------------------------------------------------
+# Intermediate detail layers
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class NightDetail:
+    """One row per (booking x occupied night) within the analysis window."""
+    night_date: date
+    day_of_week: str
+    day_type: str
+    listing_name: str
+    channel: str
+    booking_window_days: int
+    prorated_revenue: Decimal
+    check_in_date: date
+    check_out_date: date
+    reservation_date: date
+    booking_record: BookingRecord
+
+
+@dataclass(frozen=True)
+class BookingDetail:
+    """One row per booking touching the analysis window."""
+    listing_name: str
+    channel: str
+    reservation_date: date
+    check_in_date: date
+    check_out_date: date
+    los: int
+    nights_in_range: int
+    revenue_in_range: Decimal
+    booking_adr: Decimal | None
+    booking_window_days: int
+    day_types_touched: frozenset[str]
+    booking_record: BookingRecord
+
+
+@dataclass(frozen=True)
+class CalendarDetail:
+    """One row per (date x listing) for every available date in the window."""
+    night_date: date
+    day_of_week: str
+    day_type: str
+    listing_name: str
+    is_available: bool
+    is_sold: bool
+    revenue: Decimal
+
+
+# ---------------------------------------------------------------------------
+# Builder functions
+# ---------------------------------------------------------------------------
+
+def build_night_details(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    *,
+    date_basis: DateBasis = "stay",
+    as_of_date: date | None = None,
+) -> list[NightDetail]:
+    """Build the night-level detail table from filtered bookings."""
+    details: list[NightDetail] = []
+    for r in _filter_records_no_property(records, start_date, end_date, date_basis, as_of_date):
+        if date_basis != "stay":
+            continue  # night-level only meaningful for stay-overlap
+        per_night = prorate_revenue(r.room_revenue, r.room_nights)
+        bw = booking_window_days_for_record(r)
+        ch = (r.channel or "Unknown").strip() or "Unknown"
+        overlap_start = max(r.check_in_date, start_date)
+        overlap_end_excl = min(r.check_out_date, end_date + timedelta(days=1))
+        d = overlap_start
+        while d < overlap_end_excl:
+            details.append(NightDetail(
+                night_date=d,
+                day_of_week=DOW_LABELS[d.weekday()],
+                day_type=classify_day_type(d),
+                listing_name=r.listing_name or r.property_id,
+                channel=ch,
+                booking_window_days=bw,
+                prorated_revenue=per_night,
+                check_in_date=r.check_in_date,
+                check_out_date=r.check_out_date,
+                reservation_date=r.reservation_date,
+                booking_record=r,
+            ))
+            d += timedelta(days=1)
+    return details
+
+
+def build_booking_details(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    *,
+    date_basis: DateBasis = "stay",
+    as_of_date: date | None = None,
+) -> list[BookingDetail]:
+    """Build the booking-level detail table from filtered bookings."""
+    details: list[BookingDetail] = []
+    for r in _filter_records_no_property(records, start_date, end_date, date_basis, as_of_date):
+        if date_basis == "stay":
+            nir = nights_in_range(r, start_date, end_date)
+            rir = revenue_in_range(r, start_date, end_date)
+        else:
+            nir = r.room_nights
+            rir = r.room_revenue
+
+        adr = _safe_div(rir, Decimal(nir)) if nir > 0 else None
+        ch = (r.channel or "Unknown").strip() or "Unknown"
+
+        touched: set[str] = set()
+        if date_basis == "stay":
+            d = max(r.check_in_date, start_date)
+            end_excl = min(r.check_out_date, end_date + timedelta(days=1))
+            while d < end_excl:
+                touched.add(classify_day_type(d))
+                d += timedelta(days=1)
+        else:
+            d = r.check_in_date
+            while d < r.check_out_date:
+                touched.add(classify_day_type(d))
+                d += timedelta(days=1)
+
+        details.append(BookingDetail(
+            listing_name=r.listing_name or r.property_id,
+            channel=ch,
+            reservation_date=r.reservation_date,
+            check_in_date=r.check_in_date,
+            check_out_date=r.check_out_date,
+            los=r.room_nights,
+            nights_in_range=nir,
+            revenue_in_range=rir,
+            booking_adr=_quantize_2(adr),
+            booking_window_days=booking_window_days_for_record(r),
+            day_types_touched=frozenset(touched),
+            booking_record=r,
+        ))
+    return details
+
+
+def build_calendar_details(
+    night_details: list[NightDetail],
+    start_date: date,
+    end_date: date,
+    listing_live_dates: dict[str, date] | None = None,
+    listings: Iterable[str] | None = None,
+) -> list[CalendarDetail]:
+    """Build the calendar table by joining against NightDetail for sold/revenue.
+
+    One row per (date x listing) for every available date in the window.
+    """
+    if listing_live_dates is None:
+        listing_live_dates = {}
+
+    listing_set: set[str]
+    if listings is not None:
+        listing_set = set(listings)
+    else:
+        listing_set = set(listing_live_dates.keys())
+        listing_set.update(nd.listing_name for nd in night_details)
+
+    sold_map: dict[tuple[date, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    for nd in night_details:
+        sold_map[(nd.night_date, nd.listing_name)] += nd.prorated_revenue
+
+    details: list[CalendarDetail] = []
+    d = start_date
+    while d <= end_date:
+        dow = DOW_LABELS[d.weekday()]
+        dt = classify_day_type(d)
+        for listing in sorted(listing_set):
+            live = listing_live_dates.get(listing)
+            is_avail = live is not None and d >= live
+            key = (d, listing)
+            rev = sold_map.get(key, Decimal("0"))
+            is_sold = rev > 0 or key in sold_map
+            details.append(CalendarDetail(
+                night_date=d,
+                day_of_week=dow,
+                day_type=dt,
+                listing_name=listing,
+                is_available=is_avail,
+                is_sold=key in sold_map,
+                revenue=rev,
+            ))
+        d += timedelta(days=1)
+    return details
+
+
+def _filter_records_no_property(
+    records: list[BookingRecord],
+    start_date: date,
+    end_date: date,
+    date_basis: DateBasis,
+    as_of_date: date | None,
+) -> list[BookingRecord]:
+    """Filter records by date basis and as-of, without property_id filter."""
+    return [
+        r for r in records
+        if _matches_date_filter(r, start_date, end_date, date_basis)
+        and r.status not in CANCELLED_STATUSES
+        and (as_of_date is None or r.reservation_date <= as_of_date)
+    ]
 
 
 @dataclass(frozen=True)
@@ -44,6 +269,14 @@ class SnapshotMetrics:
     arrival_day_of_week_mix: dict[str, int]
     channel_mix: dict[str, dict[str, Decimal | int | None]]
     as_of_date: date | None = None
+    # Enriched fields (populated by the new aggregation layer)
+    adr_median: Decimal | None = None
+    adr_max: Decimal | None = None
+    adr_p25: Decimal | None = None
+    adr_p75: Decimal | None = None
+    day_type_metrics: dict | None = None
+    channel_deep_metrics: dict | None = None
+    dow_metrics: dict | None = None
 
 
 def _safe_div(numerator: Decimal, denominator: Decimal) -> Decimal | None:
@@ -77,7 +310,7 @@ def _median(values: Iterable[int]) -> Decimal | None:
 
 
 def _dow_label(d: date) -> str:
-    return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d.weekday()]
+    return DOW_LABELS[d.weekday()]
 
 
 def _los_bucket(nights: int) -> str:

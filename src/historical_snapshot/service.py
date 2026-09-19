@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from historical_snapshot.config import (
@@ -16,6 +16,9 @@ from historical_snapshot.core.bands import DEFAULT_BANDS, Band, parse_bands
 from historical_snapshot.core.metrics import (
     DateBasis,
     SnapshotMetrics,
+    build_booking_details,
+    build_calendar_details,
+    build_night_details,
     comparable_live_listings,
     compute_portfolio_snapshot_metrics,
     compute_snapshot_metrics,
@@ -24,7 +27,8 @@ from historical_snapshot.core.metrics import (
     listing_available_nights_in_window,
     total_available_room_nights,
 )
-from historical_snapshot.core.snapshot import snapshot_to_dict
+from historical_snapshot.core.aggregations import aggregate_blended, aggregate_by_period
+from historical_snapshot.core.snapshot import _decimal_to_float, snapshot_to_dict
 from historical_snapshot.io.google_sheets import (
     read_sync_metadata,
     sheets_cache_path,
@@ -164,10 +168,12 @@ def resolve_available_room_nights(
     listing_inventory: dict[str, int] | None = None,
     listing_name: str | None = None,
     comparable_listings: frozenset[str] | None = None,
+    force_include_listings: frozenset[str] | None = None,
 ) -> int | None:
     if inventory_mode == "live_listings" and listing_live_dates:
         if listing_name is not None:
-            if comparable_listings is not None and listing_name not in comparable_listings:
+            forced = force_include_listings is not None and listing_name in force_include_listings
+            if comparable_listings is not None and listing_name not in comparable_listings and not forced:
                 return 0
             live_date = listing_live_dates.get(listing_name)
             if live_date is None:
@@ -404,6 +410,7 @@ def run_snapshot(
     as_of_date: str | date | None = None,
     yoy_compare_start_date: str | date | None = None,
     yoy_compare_end_date: str | date | None = None,
+    include_listings_in_breakdown: list[str] | tuple[str, ...] | frozenset[str] | None = None,
 ) -> SnapshotResult:
     start = parse_date(start_date)
     end = parse_date(end_date)
@@ -418,6 +425,19 @@ def run_snapshot(
     )
     if (yoy_compare_start is None) ^ (yoy_compare_end is None):
         raise ValueError("yoy_compare_start_date and yoy_compare_end_date must both be set")
+
+    # Listings named here are always retained in breakdown_snapshots (and get a
+    # real available-room-nights figure) even if the YoY comparable_listings
+    # filter would otherwise exclude them - e.g. a cross-listing compare
+    # involving a brand-new unit with no prior-year data. Portfolio-level
+    # inventory/occupancy math (which uses comparable_listings directly) is
+    # untouched; this only widens which listings survive into the per-listing
+    # breakdown.
+    forced_listings: frozenset[str] | None = (
+        frozenset(str(name) for name in include_listings_in_breakdown)
+        if include_listings_in_breakdown
+        else None
+    )
 
     if property_folder:
         property_config = load_property_config(property_folder)
@@ -498,22 +518,43 @@ def run_snapshot(
         comparable_listings=comparable_listings,
     )
 
-    portfolio = compute_portfolio_snapshot_metrics(
-        records=portfolio_records,
+    portfolio_nd = build_night_details(portfolio_records, start, end, date_basis=date_basis, as_of_date=as_of)
+    portfolio_bd = build_booking_details(portfolio_records, start, end, date_basis=date_basis, as_of_date=as_of)
+    portfolio_cd = build_calendar_details(portfolio_nd, start, end, listing_live_dates=live_dates or None)
+
+    portfolio = aggregate_blended(
+        booking_details=portfolio_bd,
+        night_details=portfolio_nd,
+        calendar_details=portfolio_cd,
+        property_id="__portfolio__",
         property_name=property_name,
         start_date=start,
         end_date=end,
         bands=parsed_bands,
-        date_basis=date_basis,
-        inventory_units=portfolio_inventory,
         available_room_nights=portfolio_available_nights,
+        inventory_units=portfolio_inventory,
         as_of_date=as_of,
     )
+
     breakdown_source = portfolio_records if comparable_listings is not None else records
+    if forced_listings and comparable_listings is not None:
+        # portfolio_records already dropped these listings' raw rows entirely -
+        # pull them back in from the unfiltered records so their breakdown
+        # snapshot has real bookings to aggregate, not zero.
+        already_ids = {(r.listing_name or r.property_id) for r in breakdown_source}
+        missing_ids = forced_listings - already_ids
+        if missing_ids:
+            breakdown_source = list(breakdown_source) + [
+                r for r in records if (r.listing_name or r.property_id) in missing_ids
+            ]
     breakdown_records = records_for_breakdown(breakdown_source, breakdown_by)
     bucket_ids = sorted({r.property_id for r in breakdown_records})
     if comparable_listings is not None and breakdown_by == "listing":
-        bucket_ids = sorted(name for name in bucket_ids if name in comparable_listings)
+        bucket_ids = sorted(
+            name
+            for name in bucket_ids
+            if name in comparable_listings or (forced_listings and name in forced_listings)
+        )
     inventory_by_group = (
         grouping_inventory_counts(
             records, start, end, inventory_mode=inventory_mode
@@ -541,23 +582,34 @@ def run_snapshot(
             listing_inventory=listing_inventory or None,
             listing_name=bucket_id if breakdown_by == "listing" else None,
             comparable_listings=comparable_listings,
+            force_include_listings=forced_listings,
         )
 
-    breakdown_snapshots = [
-        compute_snapshot_metrics(
-            records=breakdown_records,
+    breakdown_snapshots: list[SnapshotMetrics] = []
+    for bucket_id in bucket_ids:
+        bucket_records = [r for r in breakdown_records if r.property_id == bucket_id]
+        b_nd = build_night_details(bucket_records, start, end, date_basis=date_basis, as_of_date=as_of)
+        b_bd = build_booking_details(bucket_records, start, end, date_basis=date_basis, as_of_date=as_of)
+        b_cd = build_calendar_details(
+            b_nd, start, end,
+            listing_live_dates=live_dates or None,
+            listings=[bucket_id] if breakdown_by == "listing" else None,
+        )
+        snap = aggregate_blended(
+            booking_details=b_bd,
+            night_details=b_nd,
+            calendar_details=b_cd,
             property_id=bucket_id,
+            property_name=property_name,
             start_date=start,
             end_date=end,
             bands=parsed_bands,
-            date_basis=date_basis,
-            inventory_units=breakdown_inventory_units(bucket_id),
             available_room_nights=breakdown_available_nights(bucket_id),
+            inventory_units=breakdown_inventory_units(bucket_id),
             as_of_date=as_of,
         )
-        for bucket_id in bucket_ids
-    ]
-    breakdown_snapshots = [item for item in breakdown_snapshots if item.bookings_count > 0]
+        if snap.bookings_count > 0:
+            breakdown_snapshots.append(snap)
 
     return SnapshotResult(
         property_id=property_id,
@@ -573,3 +625,91 @@ def run_snapshot(
             tuple(sorted(comparable_listings)) if comparable_listings is not None else None
         ),
     )
+
+
+def run_listing_ramp_series(
+    listing_name: str,
+    *,
+    property_folder: str | None = None,
+    property_id: str | None = None,
+    csv_path: str | Path | None = None,
+    data_root: Path | str = DEFAULT_DATA_ROOT,
+    date_basis: DateBasis = "stay",
+    period: str = "monthly",
+    horizon_months: int = 18,
+) -> list[dict] | None:
+    """Monthly rollup for one listing from its go-live date through a capped horizon.
+
+    Built via a single aggregate_by_period() pass over that listing's own detail
+    tables (not N per-month snapshot calls) - one read + one build_night_details/
+    build_booking_details/build_calendar_details pass over the whole ramp window,
+    then one aggregation call.
+
+    Capped to a fixed since-go-live window (default 18 months), not a rolling
+    most-recent window and not unbounded through today - the point of a ramp
+    view is launch trajectory, not ongoing performance, so an old listing
+    doesn't produce years of rows.
+
+    Returns None if the listing has no known go-live date (nothing to build a
+    ramp from) rather than raising, so a caller comparing several listings can
+    skip the ones without one.
+    """
+    resolved_csv_path, property_config = resolve_snapshot_csv_path(
+        csv_path=csv_path,
+        property_folder=property_folder,
+        property_id=property_id,
+        data_root=data_root,
+    )
+    if property_config is None:
+        return None
+
+    live_dates = property_config.listing_live_dates or {}
+    go_live = live_dates.get(listing_name)
+    if go_live is None:
+        return None
+
+    today = date.today()
+    horizon_end = go_live + timedelta(days=30 * horizon_months)
+    end = min(today, horizon_end)
+    if end < go_live:
+        return None
+
+    records, _issues = read_property_bookings(
+        resolved_csv_path,
+        property_config=property_config,
+        data_root=data_root,
+    )
+    listing_records = [r for r in records if (r.listing_name or r.property_id) == listing_name]
+
+    night_details = build_night_details(listing_records, go_live, end, date_basis=date_basis)
+    booking_details = build_booking_details(listing_records, go_live, end, date_basis=date_basis)
+    calendar_details = build_calendar_details(
+        night_details,
+        go_live,
+        end,
+        listing_live_dates=live_dates or None,
+        listings=[listing_name],
+    )
+
+    periods = aggregate_by_period(
+        night_details,
+        booking_details,
+        calendar_details,
+        period=period,
+        start_date=go_live,
+        end_date=end,
+    )
+    return [
+        {
+            "period": p.period_label,
+            "start_date": p.start_date.isoformat(),
+            "end_date": p.end_date.isoformat(),
+            "bookings_count": p.bookings_count,
+            "room_nights_sold": p.room_nights_sold,
+            "room_revenue": _decimal_to_float(p.room_revenue),
+            "adr": _decimal_to_float(p.adr_weighted),
+            "occupancy_pct": _decimal_to_float(p.occupancy_pct),
+            "revpar": _decimal_to_float(p.revpar),
+        }
+        for p in periods
+    ]

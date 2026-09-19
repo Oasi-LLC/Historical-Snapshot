@@ -60,7 +60,9 @@ def format_clarification(message: str, proposed: dict | None = None) -> str:
     return "\n".join(lines).strip()
 
 
-FULL_MODE_FIELDS: tuple[str, ...] = (
+# Legacy 5-field schema (still accepted for backward compatibility with any
+# cached responses, but no longer emitted by the full-mode prompt).
+_LEGACY_FULL_MODE_FIELDS: tuple[str, ...] = (
     "stay_state",
     "primary_comparison",
     "driver_decomposition",
@@ -68,20 +70,57 @@ FULL_MODE_FIELDS: tuple[str, ...] = (
     "action",
 )
 
+# Current 3-field schema for full mode.
+_NEW_FULL_MODE_BULLET_FIELDS: tuple[str, ...] = ("analysis", "gap_and_action")
+_NEW_FULL_MODE_ALL_FIELDS: frozenset[str] = frozenset(
+    ("stay_context",) + _NEW_FULL_MODE_BULLET_FIELDS
+)
+
 
 def render_interpretation_struct(data: dict, *, reply_mode: str = "full") -> str | None:
     """Render a parsed JSON interpretation object into numbered Slack text.
 
-    Full mode expects one string per doctrine step (any of FULL_MODE_FIELDS); reduced modes
-    expect a flat `{"bullets": [...]}` list. Either shape produces discrete, complete bullets
-    by construction — no regex line-splitting, no character truncation.
+    Full mode (new schema): expects {stay_context, analysis, gap_and_action}.
+      - stay_context becomes the section header (not a numbered bullet).
+      - analysis and gap_and_action become numbered bullets.
+
+    Full mode (legacy schema): expects one string per _LEGACY_FULL_MODE_FIELDS.
+      Accepted for backward compatibility; renders as numbered bullets under
+      the plain "Interpretation" header.
+
+    Reduced modes (delta_listings, delta_channels, etc.): expect a flat
+      {"bullets": [...]} list.
+
+    All shapes produce discrete, complete bullets with no regex line-splitting.
     """
     if not isinstance(data, dict):
         return None
 
-    if any(key in data for key in FULL_MODE_FIELDS):
+    # New 3-field full-mode schema
+    if any(key in data for key in _NEW_FULL_MODE_ALL_FIELDS):
+        ctx = data.get("stay_context")
+        header = (
+            f"Interpretation — {strip_markdown_emphasis(str(ctx)).strip()}"
+            if ctx and str(ctx).strip() not in ("", "null")
+            else "Interpretation"
+        )
+        bullets: list[str] = []
+        for key in _NEW_FULL_MODE_BULLET_FIELDS:
+            value = data.get(key)
+            if value in (None, "", "null"):
+                continue
+            text = strip_markdown_emphasis(str(value)).strip()
+            if text:
+                bullets.append(text)
+        if not bullets:
+            return None
+        numbered = [f"{idx}. {item}" for idx, item in enumerate(bullets, start=1)]
+        return header + "\n\n" + "\n".join(numbered)
+
+    # Legacy 5-field full-mode schema (backward compatibility)
+    if any(key in data for key in _LEGACY_FULL_MODE_FIELDS):
         lines: list[str] = []
-        for key in FULL_MODE_FIELDS:
+        for key in _LEGACY_FULL_MODE_FIELDS:
             value = data.get(key)
             if value in (None, "", "null"):
                 continue
@@ -93,10 +132,11 @@ def render_interpretation_struct(data: dict, *, reply_mode: str = "full") -> str
         numbered = [f"{idx}. {item}" for idx, item in enumerate(lines, start=1)]
         return "Interpretation\n\n" + "\n".join(numbered)
 
-    bullets = data.get("bullets")
-    if not isinstance(bullets, list) or not bullets:
+    # Reduced-mode flat bullets list
+    flat = data.get("bullets")
+    if not isinstance(flat, list) or not flat:
         return None
-    cleaned = [strip_markdown_emphasis(str(item)).strip() for item in bullets]
+    cleaned = [strip_markdown_emphasis(str(item)).strip() for item in flat]
     cleaned = [item for item in cleaned if item]
     if not cleaned:
         return None

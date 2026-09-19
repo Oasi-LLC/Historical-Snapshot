@@ -1,12 +1,80 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from historical_snapshot.chat.format_utils import shift_one_year
 from historical_snapshot.chat.models import ChatSnapshotQuery, ChatSnapshotResult
 from historical_snapshot.chat.parser_rules import _normalize_listing_key
 from historical_snapshot.core.bands import DEFAULT_BANDS
 from historical_snapshot.service import run_snapshot
+
+
+def _portfolio_rev(snapshot: dict | None) -> float | None:
+    if snapshot is None:
+        return None
+    ps = snapshot.get("portfolio_snapshot") or snapshot
+    v = ps.get("room_revenue")
+    return float(v) if v is not None else None
+
+
+def _portfolio_bk(snapshot: dict | None) -> int | None:
+    if snapshot is None:
+        return None
+    ps = snapshot.get("portfolio_snapshot") or snapshot
+    v = ps.get("bookings_count")
+    return int(v) if v is not None else None
+
+
+def _portfolio_nights(snapshot: dict | None) -> int | None:
+    if snapshot is None:
+        return None
+    ps = snapshot.get("portfolio_snapshot") or snapshot
+    v = ps.get("room_nights_sold")
+    return int(v) if v is not None else None
+
+
+def _build_gap_summary(
+    pace_prior: dict | None,
+    prior_final: dict | None,
+) -> dict[str, Any] | None:
+    """Pre-compute LY pace-to-final deltas so the LLM can cite them directly.
+
+    Using pre-computed deltas prevents the model from performing arithmetic
+    on tool figures (forbidden by the RM doctrine tripwires).
+    """
+    if pace_prior is None or prior_final is None:
+        return None
+
+    pace_rev = _portfolio_rev(pace_prior)
+    final_rev = _portfolio_rev(prior_final)
+    if pace_rev is None or final_rev is None:
+        return None
+
+    pace_bk = _portfolio_bk(pace_prior)
+    final_bk = _portfolio_bk(prior_final)
+    pace_nights = _portfolio_nights(pace_prior)
+    final_nights = _portfolio_nights(prior_final)
+
+    return {
+        "ly_pace_rev": pace_rev,
+        "ly_final_rev": final_rev,
+        "ly_delta_rev": round(final_rev - pace_rev, 2),
+        "ly_pace_bk": pace_bk,
+        "ly_final_bk": final_bk,
+        "ly_delta_bk": (
+            (final_bk - pace_bk)
+            if (pace_bk is not None and final_bk is not None)
+            else None
+        ),
+        "ly_pace_nights": pace_nights,
+        "ly_final_nights": final_nights,
+        "ly_delta_nights": (
+            (final_nights - pace_nights)
+            if (pace_nights is not None and final_nights is not None)
+            else None
+        ),
+    }
 
 
 def _find_listing_row(breakdown: list[dict], listing_name: str) -> dict | None:
@@ -40,6 +108,13 @@ def _snapshot_params(
         "bands": DEFAULT_BANDS,
         "inventory_listings": query.inventory_listings,
     }
+    if query.compare_listings:
+        # A cross-listing compare must retain both named listings in the
+        # breakdown even if one (or both) fails the YoY comparable_listings
+        # filter - otherwise a brand-new unit silently drops out and the
+        # compare falls back to the "no units live in both windows" message
+        # instead of a real side-by-side.
+        params["include_listings_in_breakdown"] = query.compare_listings
     if as_of_date is not None:
         params["as_of_date"] = as_of_date.isoformat()
     if yoy_compare_start is not None and yoy_compare_end is not None:
@@ -140,6 +215,8 @@ def execute_query(query: ChatSnapshotQuery, *, data_root: str = "data") -> ChatS
             query.listing_name,
         )
 
+    gap_summary = _build_gap_summary(pace_prior, prior_final)
+
     return ChatSnapshotResult(
         query=query,
         current_total=current_total,
@@ -153,4 +230,5 @@ def execute_query(query: ChatSnapshotQuery, *, data_root: str = "data") -> ChatS
         listing_pace_prior=listing_snapshots.get("pace_prior"),
         listing_prior_final=listing_snapshots.get("prior_final"),
         comparable_listings=list(comparable),
+        gap_summary=gap_summary,
     )

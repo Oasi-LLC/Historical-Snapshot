@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from historical_snapshot.chat.format_utils import (
@@ -84,12 +85,68 @@ def _performance_table(
             lines.append(
                 f"{label:<12} {cur:>10} {pace:>10} {final:>10} {vs_pace:>9} {vs_final:>9}"
             )
+        # ADR median/max as additional rows inside the table block
+        adr_med = current.get("adr_median")
+        if adr_med is not None:
+            pace_med = fmt_money((prior_pace or {}).get("adr_median")) if prior_pace else "—"
+            final_med = fmt_money((prior_final or {}).get("adr_median")) if prior_final else "—"
+            vs_p = pct_change(adr_med, (prior_pace or {}).get("adr_median")) if prior_pace else "—"
+            vs_f = pct_change(adr_med, (prior_final or {}).get("adr_median")) if prior_final else "—"
+            lines.append(
+                f"{'ADR median':<12} {fmt_money(adr_med):>10} {pace_med:>10} {final_med:>10} {vs_p:>9} {vs_f:>9}"
+            )
+        adr_max = current.get("adr_max")
+        if adr_max is not None:
+            pace_max = fmt_money((prior_pace or {}).get("adr_max")) if prior_pace else "—"
+            final_max = fmt_money((prior_final or {}).get("adr_max")) if prior_final else "—"
+            vs_p = pct_change(adr_max, (prior_pace or {}).get("adr_max")) if prior_pace else "—"
+            vs_f = pct_change(adr_max, (prior_final or {}).get("adr_max")) if prior_final else "—"
+            lines.append(
+                f"{'ADR max':<12} {fmt_money(adr_max):>10} {pace_max:>10} {final_max:>10} {vs_p:>9} {vs_f:>9}"
+            )
     else:
         lines.append(f"{'Metric':<12} {'Current':>10}")
         for field, label, kind in rows:
             cur = _format_value(current, field, kind)
             lines.append(f"{label:<12} {cur:>10}")
+        adr_med = current.get("adr_median")
+        adr_max = current.get("adr_max")
+        if adr_med is not None:
+            lines.append(f"{'ADR median':<12} {fmt_money(adr_med):>10}")
+        if adr_max is not None:
+            lines.append(f"{'ADR max':<12} {fmt_money(adr_max):>10}")
 
+    lines.append("```")
+    return lines
+
+
+def _day_type_table(portfolio: dict | None) -> list[str]:
+    """Weekday/weekend breakdown table when day_type_metrics is present."""
+    if not portfolio:
+        return []
+    dt_data = portfolio.get("day_type_metrics")
+    if not dt_data:
+        return []
+    lines = ["```", format_section_header("Weekday / Weekend")]
+    lines.append(
+        f"{'':>8} {'Avail':>6} {'Sold':>6} {'Occ%':>6} "
+        f"{'ADR(w)':>8} {'ADR(m)':>8} {'RevPAR':>8}"
+    )
+    for dt_name in ("Sun-Thu", "Fri-Sat"):
+        m = dt_data.get(dt_name)
+        if not m:
+            continue
+        adr_w = fmt_money(m.get("adr_weighted"))
+        adr_stats = m.get("adr_stats") or {}
+        adr_m = fmt_money(adr_stats.get("median"))
+        lines.append(
+            f"{dt_name:>8} "
+            f"{fmt_number(m.get('available_room_nights')):>6} "
+            f"{fmt_number(m.get('room_nights_sold')):>6} "
+            f"{fmt_pct(m.get('occupancy_pct')):>6} "
+            f"{adr_w:>8} {adr_m:>8} "
+            f"{fmt_money(m.get('revpar')):>8}"
+        )
     lines.append("```")
     return lines
 
@@ -275,6 +332,11 @@ def format_reply(result: ChatSnapshotResult) -> str:
     )
     lines.append("")
 
+    dt_table = _day_type_table(current)
+    if dt_table:
+        lines.extend(dt_table)
+        lines.append("")
+
     bullets = _booking_window_summary_table(prior_pace=prior_pace, prior_final=prior_final)
     if bullets:
         lines.extend(bullets)
@@ -298,7 +360,24 @@ def format_reply(result: ChatSnapshotResult) -> str:
 
 
 def _short_listing_name(name: str, *, width: int = 28) -> str:
+    """Return a display name for a listing, truncated to `width` characters.
+
+    For names formatted as "NNN Section: Unit Name" (e.g. LaFave's
+    "100 LaFave South: Temple of Sinawava"), strip the prefix and show
+    only the unit name part so the table stays readable.
+    """
+    import re as _re
     text = (name or "").strip() or "Unknown"
+    # Strip leading "NNN Section: " prefix (e.g. "100 LaFave South: ")
+    stripped = _re.sub(r"^\d+\s+[^:]+:\s*", "", text).strip()
+    if stripped and stripped != text:
+        text = stripped
+    # Strip leading "Word(s): " prefix when the remainder is non-empty
+    # (e.g. "Great Lodge: King Room" -> "King Room")
+    elif _re.match(r"^[A-Za-z][^:]+:\s+\S", text):
+        candidate = _re.sub(r"^[^:]+:\s+", "", text).strip()
+        if candidate:
+            text = candidate
     if len(text) <= width:
         return text
     return text[: width - 1] + "…"
@@ -343,20 +422,39 @@ def _channel_mix_table(
         reverse=True,
     )[:limit]
     lines = ["```", format_section_header(title)]
-    lines.append(f"{'Channel':<12} {'Rev':>9} {'Share':>7} {'Bkgs':>5} {'Nights':>6} {'ADR':>7}")
+    has_deep = any(
+        (item[1] or {}).get("adr_stats") for item in ranked
+    )
+    if has_deep:
+        lines.append(f"{'Channel':<12} {'Rev':>9} {'Share':>7} {'Bkgs':>5} {'Nights':>6} {'ADR(w)':>8} {'ADR(m)':>8}")
+    else:
+        lines.append(f"{'Channel':<12} {'Rev':>9} {'Share':>7} {'Bkgs':>5} {'Nights':>6} {'ADR':>7}")
     for channel, stats in ranked:
         stats = stats or {}
         share = stats.get("revenue_share_pct")
         share_label = f"{round(float(share))}%" if share is not None else "—"
         label = channel[:12]
-        lines.append(
-            f"{label:<12} "
-            f"{fmt_money(stats.get('revenue')):>9} "
-            f"{share_label:>7} "
-            f"{fmt_number(stats.get('bookings_count')):>5} "
-            f"{fmt_number(stats.get('room_nights')):>6} "
-            f"{fmt_money(stats.get('adr')):>7}"
-        )
+        adr_w = fmt_money(stats.get("adr_weighted") or stats.get("adr"))
+        if has_deep:
+            adr_stats = stats.get("adr_stats") or {}
+            adr_m = fmt_money(adr_stats.get("median"))
+            lines.append(
+                f"{label:<12} "
+                f"{fmt_money(stats.get('revenue') or stats.get('room_revenue')):>9} "
+                f"{share_label:>7} "
+                f"{fmt_number(stats.get('bookings_count')):>5} "
+                f"{fmt_number(stats.get('room_nights')):>6} "
+                f"{adr_w:>8} {adr_m:>8}"
+            )
+        else:
+            lines.append(
+                f"{label:<12} "
+                f"{fmt_money(stats.get('revenue')):>9} "
+                f"{share_label:>7} "
+                f"{fmt_number(stats.get('bookings_count')):>5} "
+                f"{fmt_number(stats.get('room_nights')):>6} "
+                f"{fmt_money(stats.get('adr')):>7}"
+            )
     lines.append("```")
     return lines
 
@@ -473,6 +571,52 @@ def _compare_listings_table(
     return lines
 
 
+def _format_month_label(period: str) -> str:
+    """"YYYY-MM" -> "Jan 2026". Falls back to the raw label if unparseable."""
+    try:
+        year, month = period.split("-")
+        return date(int(year), int(month), 1).strftime("%b %Y")
+    except (ValueError, IndexError):
+        return period
+
+
+def _ramp_series_table(ramp_series: dict[str, list[dict]], names: list[str]) -> list[str]:
+    """Monthly ramp since go-live, one Rev/Occ column pair per listing.
+
+    Rows are aligned by calendar month (via each row's "period" key) even
+    though the two listings may have different go-live dates - a listing not
+    yet live in a given month just shows "-" instead of a misleading $0.
+    """
+    present = [name for name in names if ramp_series.get(name)]
+    if not present:
+        return []
+
+    by_period: dict[str, dict[str, dict]] = {}
+    for name in present:
+        for row in ramp_series[name]:
+            by_period.setdefault(row.get("period"), {})[name] = row
+    periods = sorted(by_period.keys())
+    if not periods:
+        return []
+
+    lines = ["```", format_section_header("Monthly ramp since go-live")]
+    header = f"{'Month':<10}"
+    for name in present:
+        label = _short_listing_name(name, width=14)
+        header += f" {label + ' Rev':>18} {label + ' Occ':>12}"
+    lines.append(header)
+    for period in periods:
+        row_line = f"{_format_month_label(period):<10}"
+        for name in present:
+            row = by_period[period].get(name)
+            rev = fmt_money(row.get("room_revenue")) if row else "—"
+            occ = fmt_pct(row.get("occupancy_pct")) if row else "—"
+            row_line += f" {rev:>18} {occ:>12}"
+        lines.append(row_line)
+    lines.append("```")
+    return lines
+
+
 def format_listing_compare_report(
     result: ChatSnapshotResult,
     metrics: dict[str, Any],
@@ -529,6 +673,12 @@ def format_listing_compare_report(
                 current_bits.append(f"{_short_listing_name(name, width=40)}: $0 on books")
         if current_bits:
             sections.append("_Current pace:_ " + "; ".join(current_bits))
+
+    ramp_series = metrics.get("ramp_series") or {}
+    if ramp_series:
+        ramp_lines = _ramp_series_table(ramp_series, names)
+        if ramp_lines:
+            sections.append("\n".join(ramp_lines))
 
     return "\n\n".join(section for section in sections if section).strip()
 

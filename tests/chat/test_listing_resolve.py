@@ -1,7 +1,40 @@
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
+
 from historical_snapshot.chat.parser_rules import _resolve_listing
 from historical_snapshot.config import load_property_config
+from historical_snapshot.io.postprocess import apply_property_postprocess
+from historical_snapshot.models import BookingRecord
+
+
+def test_wmb_ada_aliases_resolve_to_accessible():
+    config = load_property_config("wmb")
+    assert _resolve_listing("Greenhouse ADA", config) == "Greenhouse (Accessible)"
+    assert _resolve_listing("Spyglass ADA", config) == "Spyglass (Accessible)"
+
+
+def test_wmb_ada_bookings_are_not_dropped():
+    config = load_property_config("wmb")
+    record = BookingRecord(
+        property_id="WMB",
+        property_name="Onera Wimberley",
+        listing_name="Greenhouse ADA",
+        channel="Expedia (Channel Collect Booking)",
+        grouping="",
+        reservation_date=date(2026, 7, 21),
+        booking_date=date(2026, 7, 21),
+        check_in_date=date(2026, 11, 30),
+        check_out_date=date(2026, 12, 3),
+        room_revenue=Decimal("836.04"),
+        room_nights=3,
+        status="confirmed",
+    )
+    kept = apply_property_postprocess([record], config)
+    assert len(kept) == 1
+    assert kept[0].listing_name == "Greenhouse (Accessible)"
+    assert kept[0].grouping == "Greenhouse"
 
 
 def test_great_lodge_king_room_resolves_without_colon():

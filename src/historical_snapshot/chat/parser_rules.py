@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import re
 from datetime import date, datetime
 
@@ -39,7 +40,7 @@ ISO_DATE = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b")
 MDY_DATE = re.compile(
     r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
     r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?",
+    r"\s+(\d{1,2})(?:st|nd|rd|th)?(?!\d)(?:,?\s*(20\d{2}))?",
     re.IGNORECASE,
 )
 DATE_RANGE = re.compile(
@@ -99,6 +100,33 @@ def _parse_dates(text: str) -> tuple[date, date] | None:
         year = int(single.group(3)) if single.group(3) else _default_year(text)
         day = _parse_month_day(single.group(1), int(single.group(2)), year)
         return day, day
+
+    # "Aug 2026", "September 2025" — bare month + year → full month range
+    month_year = re.search(
+        r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+        r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+        r"\s+(20\d{2})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if month_year:
+        month_num = MONTHS[month_year.group(1).lower()[:3]]
+        yr = int(month_year.group(2))
+        last_day = calendar.monthrange(yr, month_num)[1]
+        return date(yr, month_num, 1), date(yr, month_num, last_day)
+
+    # Bare month name without year or day → full month in default year
+    bare_month = re.search(
+        r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+        r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if bare_month:
+        month_num = MONTHS[bare_month.group(1).lower()[:3]]
+        yr = _default_year(text)
+        last_day = calendar.monthrange(yr, month_num)[1]
+        return date(yr, month_num, 1), date(yr, month_num, last_day)
 
     if re.search(r"\bfourth of july\b|\bjuly 4th\b|\bjul 4\b", text, re.IGNORECASE):
         year = _default_year(text)

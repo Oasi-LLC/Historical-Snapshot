@@ -17,6 +17,9 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
 MAX_TOOL_ROUNDS = 5
+# Newer models (claude-sonnet-5-5 and up) think before answering, and that thinking counts
+# against max_tokens. 512 cut the Interpretation JSON off after one field (27 Oct 2026).
+MAX_OUTPUT_TOKENS = int(os.environ.get("CLAUDE_MAX_OUTPUT_TOKENS", "16000"))
 # Extra app-level retries beyond the SDK defaults — 529 overloaded is common and often brief.
 CLAUDE_OVERLOAD_RETRIES = int(os.environ.get("CLAUDE_OVERLOAD_RETRIES", "4"))
 CLAUDE_OVERLOAD_BASE_DELAY_SEC = float(os.environ.get("CLAUDE_OVERLOAD_BASE_DELAY_SEC", "2.0"))
@@ -128,6 +131,11 @@ def _normalize_interpretation(text: str, *, reply_mode: str = "full") -> str | N
             "Interpretation JSON parsed but had no usable fields for reply_mode=%s",
             reply_mode,
         )
+        return None
+
+    # JSON that didn't parse (e.g. cut off) must never reach Slack as numbered code lines.
+    if "```" in text or text.lstrip().startswith("{"):
+        LOGGER.warning("Interpretation looked like JSON but did not parse; omitting it: %s", text[:200])
         return None
 
     cleaned = text.strip().replace("**", "*")
@@ -293,7 +301,7 @@ def run_claude_interpretation(
         offer_tool = round_idx == 0
         create_kwargs: dict[str, Any] = {
             "model": _model_name(),
-            "max_tokens": 512,
+            "max_tokens": MAX_OUTPUT_TOKENS,
             "system": system,
             "messages": messages,
         }
@@ -372,7 +380,7 @@ def run_claude_chat(
         response = call_claude_with_retries(
             lambda: client.messages.create(
                 model=_model_name(),
-                max_tokens=4096,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 system=system_prompt,
                 tools=TOOL_SCHEMAS,
                 messages=messages,

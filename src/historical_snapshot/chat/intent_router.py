@@ -12,6 +12,7 @@ from historical_snapshot.chat.interaction_retrieval import (
     format_retrieval_context,
 )
 from historical_snapshot.chat.llm_claude import (
+    MAX_OUTPUT_TOKENS,
     _anthropic_client,
     _model_name,
     anthropic_configured,
@@ -246,7 +247,7 @@ def route_turn_with_llm(
         response = call_claude_with_retries(
             lambda: client.messages.create(
                 model=_model_name(),
-                max_tokens=512,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 system=(
                     "You classify follow-up intent for a short-term rental snapshot bot. "
                     "Respond with JSON only."

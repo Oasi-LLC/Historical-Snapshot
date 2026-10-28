@@ -8,6 +8,7 @@ from typing import Any
 
 from historical_snapshot.chat.answer_plan import AnswerPlan, parse_answer_plan
 from historical_snapshot.chat.llm_claude import (
+    MAX_OUTPUT_TOKENS,
     _anthropic_client,
     _model_name,
     anthropic_configured,
@@ -178,7 +179,7 @@ def propose_answer_plan(
         response = call_claude_with_retries(
             lambda: client.messages.create(
                 model=_model_name(),
-                max_tokens=512,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 system=_PLANNER_SYSTEM,
                 messages=[{"role": "user", "content": user_content}],
             ),
